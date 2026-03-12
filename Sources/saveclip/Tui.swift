@@ -60,7 +60,28 @@ struct TuiCommand: ParsableCommand {
             case .image:
                 FileHandle.standardOutput.write(data)
             }
-        case .copied, .cancelled:
+        case .copied(let id):
+            let config2 = Config.load()
+            let storage2 = try Storage(config: config2)
+            if let entry = storage2.get(id: id) {
+                switch entry.type {
+                case .text:
+                    let text = entry.preview
+                        .replacingOccurrences(of: "\\n", with: "\n")
+                    if text.utf8.count < 1024 {
+                        // Short text → stdout for print -z
+                        print(text, terminator: "")
+                    } else {
+                        FileHandle.standardError.write("Copied text (\(text.utf8.count / 1024)KB) to clipboard\n".data(using: .utf8)!)
+                    }
+                case .image:
+                    let size = ListRenderer.formatSize(entry.totalSize)
+                    FileHandle.standardError.write("Copied image (\(size)) to clipboard\n".data(using: .utf8)!)
+                case .filePath:
+                    FileHandle.standardError.write("Copied file path to clipboard\n".data(using: .utf8)!)
+                }
+            }
+        case .cancelled:
             break
         }
     }
@@ -75,16 +96,42 @@ final class TuiRunner {
     private let region: Region
     private let maxCount: Int
     private var needsRender = true
+    private var lastCols: Int = 0
+    private var lastRows: Int = 0
 
-    // For SIGWINCH handling
+    // For signal cleanup
     private static var shared: TuiRunner?
-    private static var resizeFlag = false
+
+    // Auto-refresh tracking
+    private var lastEntryTimestamp: Double = 0
+    private var pollCounter: Int = 0
+    private var colorPollCounter: Int = 0
+
+    // Double-click tracking
+    private var lastClickRow: Int = -1
+    private var lastClickTime: Date = .distantPast
+
+    // Divider drag tracking
+    private var isDraggingDivider = false
+    private var dragStartRow: Int = 0
+    private var dragStartPreviewLines: Int = 0
+    private let debugLog: FileHandle? = {
+        let path = "/tmp/saveclip-resize.log"
+        FileManager.default.createFile(atPath: path, contents: nil)
+        return FileHandle(forWritingAtPath: path)
+    }()
+
+    private func dlog(_ msg: String) {
+        let ts = String(format: "%.3f", Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 10000))
+        debugLog?.write("[\(ts)] \(msg)\n".data(using: .utf8)!)
+    }
 
     init(count: Int, initialQuery: String?, height: Int, unsafe: Bool = false) throws {
         self.config = Config.load()
         self.storage = try Storage(config: config)
         self.maxCount = count
         self.state = ListState()
+        state.previewLines = TuiRunner.loadPreviewLines()
 
         if let q = initialQuery {
             state.query = q
@@ -107,41 +154,78 @@ final class TuiRunner {
     }
 
     func run() -> TuiResult {
-        // Install signal handlers
+        // Install signal handlers for clean exit
         setupSignals()
 
         Terminal.enableRawMode()
+
+        // Detect terminal fg/bg colors for heatmap
+        if let colors = Terminal.queryColors() {
+            ListRenderer.updateColors(fgLuminance: colors.fg, bgLuminance: colors.bg)
+            dlog("COLORS fg=\(colors.fg) bg=\(colors.bg) -> newest=\(ListRenderer.newestGrey) oldest=\(ListRenderer.oldestGrey)")
+        } else {
+            dlog("COLORS query failed, using defaults newest=\(ListRenderer.newestGrey) oldest=\(ListRenderer.oldestGrey)")
+        }
+
+        Terminal.enableMouse()
         defer {
+            Terminal.disableMouse()
             Terminal.disableRawMode()
             region.release()
             TuiRunner.shared = nil
         }
 
         // Initial load
+        let (c, r) = Terminal.size()
+        lastCols = c; lastRows = r
+        dlog("INIT size=\(c)x\(r) region.start=\(region.startRow) region.h=\(region.height)")
         loadEntries()
-        state.filter()
+        lastEntryTimestamp = storage.latestTimestamp() ?? 0
 
         // Main event loop
         while true {
             state.clearExpiredMessage()
 
+            // Poll terminal size — handles resize from any source
+            let (cols, rows) = Terminal.size()
+            if cols != lastCols || rows != lastRows {
+                dlog("RESIZE \(lastCols)x\(lastRows) -> \(cols)x\(rows)")
+                lastCols = cols; lastRows = rows
+                region.handleResize()
+                dlog("AFTER handleResize start=\(region.startRow) h=\(region.height)")
+                needsRender = true
+            }
+
             if needsRender {
-                let (cols, _) = Terminal.size()
-                let buf = ListRenderer.render(state: state, region: region, termWidth: cols)
+                let buf = ListRenderer.render(state: state, region: region, termWidth: lastCols)
                 buf.flush()
                 needsRender = false
             }
 
-            // Check resize flag
-            if TuiRunner.resizeFlag {
-                TuiRunner.resizeFlag = false
-                region.handleResize()
-                needsRender = true
-                continue
-            }
-
             guard let key = Terminal.readKey() else {
-                // Timeout — check for expired messages
+                // Timeout (100ms) — poll for new entries every ~1s
+                pollCounter += 1
+                if pollCounter >= 10 {
+                    pollCounter = 0
+                    if let latest = storage.latestTimestamp(), latest > lastEntryTimestamp {
+                        lastEntryTimestamp = latest
+                        loadEntries()
+                        needsRender = true
+                    }
+                }
+                // Re-query terminal colors every ~5s to react to theme changes
+                colorPollCounter += 1
+                if colorPollCounter >= 50 {
+                    colorPollCounter = 0
+                    if let colors = Terminal.queryColors() {
+                        let oldN = ListRenderer.newestGrey
+                        let oldO = ListRenderer.oldestGrey
+                        ListRenderer.updateColors(fgLuminance: colors.fg, bgLuminance: colors.bg)
+                        if ListRenderer.newestGrey != oldN || ListRenderer.oldestGrey != oldO {
+                            needsRender = true
+                        }
+                    }
+                }
                 if state.message != nil { needsRender = true }
                 continue
             }
@@ -149,16 +233,18 @@ final class TuiRunner {
             switch key {
             case .enter:
                 if let item = state.selectedItem {
+                    Terminal.disableMouse()
                     Terminal.disableRawMode()
                     region.release()
+                    try? storage.bumpToFront(id: item.id)
                     copyToClipboard(entry: item.entry)
-                    writeStderr("Copied entry \(item.id)\n")
                     TuiRunner.shared = nil
                     return .copied(item.id)
                 }
 
             case .ctrl("o"):
                 if let item = state.selectedItem {
+                    Terminal.disableMouse()
                     Terminal.disableRawMode()
                     region.release()
                     TuiRunner.shared = nil
@@ -174,7 +260,6 @@ final class TuiRunner {
                         try storage.delete(id: item.id)
                         state.flash("Deleted \(item.id)")
                         loadEntries()
-                        state.filter()
                     } catch {
                         state.flash("Delete failed")
                     }
@@ -192,7 +277,6 @@ final class TuiRunner {
                             state.flash("Pinned \(item.id)")
                         }
                         loadEntries()
-                        state.filter()
                     } catch {
                         state.flash("Pin failed")
                     }
@@ -207,7 +291,6 @@ final class TuiRunner {
                     state.viewMode = .frequent
                 }
                 loadEntries()
-                state.filter()
                 needsRender = true
 
             case .ctrl("b"):
@@ -219,46 +302,136 @@ final class TuiRunner {
                     state.viewMode = .branchFiltered(currentBranch)
                 }
                 loadEntries()
-                state.filter()
                 needsRender = true
 
             case .ctrl("r"):
                 loadEntries()
-                state.filter()
                 state.flash("Reloaded")
                 needsRender = true
 
 
             case .up:
-                state.moveCursor(by: 1, visibleRows: ListRenderer.visibleRows(regionHeight: region.height))
+                state.moveCursor(by: 1, visibleRows: ListRenderer.visibleRows(regionHeight: region.height, previewLines: state.previewLines))
                 needsRender = true
 
             case .down:
-                state.moveCursor(by: -1, visibleRows: ListRenderer.visibleRows(regionHeight: region.height))
+                state.moveCursor(by: -1, visibleRows: ListRenderer.visibleRows(regionHeight: region.height, previewLines: state.previewLines))
                 needsRender = true
 
             case .pageUp:
-                state.pageDown(visibleRows: ListRenderer.visibleRows(regionHeight: region.height))
+                state.pageDown(visibleRows: ListRenderer.visibleRows(regionHeight: region.height, previewLines: state.previewLines))
                 needsRender = true
 
             case .pageDown:
-                state.pageUp(visibleRows: ListRenderer.visibleRows(regionHeight: region.height))
+                state.pageUp(visibleRows: ListRenderer.visibleRows(regionHeight: region.height, previewLines: state.previewLines))
                 needsRender = true
 
             case .home:
-                state.home(visibleRows: ListRenderer.visibleRows(regionHeight: region.height))
+                state.home(visibleRows: ListRenderer.visibleRows(regionHeight: region.height, previewLines: state.previewLines))
                 needsRender = true
 
             case .end:
-                state.end(visibleRows: ListRenderer.visibleRows(regionHeight: region.height))
+                state.end(visibleRows: ListRenderer.visibleRows(regionHeight: region.height, previewLines: state.previewLines))
                 needsRender = true
+
+            case .scrollUp(let row, _):
+                let previewEnd = region.startRow + ListRenderer.headerLines + state.previewLines
+                if row >= region.startRow + ListRenderer.headerLines && row < previewEnd {
+                    // Scroll in preview area
+                    if state.previewScrollOffset > 0 {
+                        state.previewScrollOffset -= 1
+                        needsRender = true
+                    }
+                } else {
+                    state.moveCursor(by: -1, visibleRows: ListRenderer.visibleRows(regionHeight: region.height, previewLines: state.previewLines))
+                    needsRender = true
+                }
+
+            case .scrollDown(let row, _):
+                let previewEnd = region.startRow + ListRenderer.headerLines + state.previewLines
+                if row >= region.startRow + ListRenderer.headerLines && row < previewEnd {
+                    // Scroll in preview area
+                    if let item = state.selectedItem {
+                        let totalLines = ListRenderer.previewTotalLines(item: item)
+                        let maxScroll = max(0, totalLines - state.previewLines)
+                        if state.previewScrollOffset < maxScroll {
+                            state.previewScrollOffset += 1
+                            needsRender = true
+                        }
+                    }
+                } else {
+                    state.moveCursor(by: 1, visibleRows: ListRenderer.visibleRows(regionHeight: region.height, previewLines: state.previewLines))
+                    needsRender = true
+                }
+
+            case .mouseClick(let row, _):
+                // Check if clicking the divider
+                let sepRow = region.startRow + ListRenderer.headerLines + state.previewLines
+                if row == sepRow {
+                    isDraggingDivider = true
+                    dragStartRow = row
+                    dragStartPreviewLines = state.previewLines
+                    state.dividerHighlight = true
+                    needsRender = true
+                } else {
+                    // List item click
+                    let listRows = ListRenderer.visibleRows(regionHeight: region.height, previewLines: state.previewLines)
+                    let listStartRow = region.startRow + ListRenderer.headerLines + state.previewLines + ListRenderer.separatorLines
+                    if row >= listStartRow && row < listStartRow + listRows {
+                        let visualIndex = (listStartRow + listRows - 1) - row
+                        let idx = state.scrollOffset + visualIndex
+                        if idx < state.filteredItems.count {
+                            let now = Date()
+                            let isDoubleClick = idx == state.cursor
+                                && row == lastClickRow
+                                && now.timeIntervalSince(lastClickTime) < 0.4
+                            lastClickRow = row
+                            lastClickTime = now
+                            state.cursor = idx
+                            state.previewScrollOffset = 0
+                            needsRender = true
+
+                            if isDoubleClick, let item = state.selectedItem {
+                                Terminal.disableMouse()
+                                Terminal.disableRawMode()
+                                region.release()
+                                try? storage.bumpToFront(id: item.id)
+                                copyToClipboard(entry: item.entry)
+                                TuiRunner.shared = nil
+                                return .copied(item.id)
+                            }
+                        }
+                    }
+                }
+
+            case .mouseDrag(let row, _):
+                if isDraggingDivider {
+                    // Dragging down = more preview, dragging up = less preview
+                    let delta = row - dragStartRow
+                    let newPV = dragStartPreviewLines + delta
+                    // Min 0 preview lines, max = region height - fixed overhead - 1 list row
+                    let maxPV = region.height - ListRenderer.fixedOverhead - 1
+                    let clamped = max(0, min(newPV, maxPV))
+                    if clamped != state.previewLines {
+                        state.previewLines = clamped
+                        needsRender = true
+                    }
+                }
+
+            case .mouseRelease(_, _):
+                if isDraggingDivider {
+                    isDraggingDivider = false
+                    state.dividerHighlight = false
+                    TuiRunner.savePreviewLines(state.previewLines)
+                    needsRender = true
+                }
 
             case .backspace:
                 if !state.query.isEmpty {
                     state.query.removeLast()
                     state.cursor = 0
                     state.scrollOffset = 0
-                    state.filter()
+                    loadEntries()
                     needsRender = true
                 }
 
@@ -266,7 +439,7 @@ final class TuiRunner {
                 state.query.append(ch)
                 state.cursor = 0
                 state.scrollOffset = 0
-                state.filter()
+                loadEntries()
                 needsRender = true
 
             default:
@@ -280,23 +453,31 @@ final class TuiRunner {
     private func loadEntries() {
         let now = Date()
         let calendar = Calendar.current
-        let items: [ListItem]
+        let entries: [ClipEntry]
 
-        switch state.viewMode {
-        case .all:
-            let entries = storage.list(limit: maxCount)
-            items = entries.map { makeListItem($0, now: now, calendar: calendar) }
+        let query = state.query.trimmingCharacters(in: .whitespaces)
 
-        case .frequent:
-            let freqs = storage.mostFrequent(limit: maxCount)
-            items = freqs.map { makeListItem($0.entry, now: now, calendar: calendar) }
-
-        case .branchFiltered(let branch):
-            let entries = storage.list(limit: maxCount, branch: branch)
-            items = entries.map { makeListItem($0, now: now, calendar: calendar) }
+        if !query.isEmpty {
+            // FTS5 search across entire DB
+            let branch: String? = {
+                if case .branchFiltered(let b) = state.viewMode { return b }
+                return nil
+            }()
+            entries = storage.search(query: query, limit: maxCount, branch: branch)
+        } else {
+            switch state.viewMode {
+            case .all:
+                entries = storage.list(limit: maxCount)
+            case .frequent:
+                let freqs = storage.mostFrequent(limit: maxCount)
+                state.setItems(freqs.map { makeListItem($0.entry, now: now, calendar: calendar) })
+                return
+            case .branchFiltered(let branch):
+                entries = storage.list(limit: maxCount, branch: branch)
+            }
         }
 
-        state.setItems(items)
+        state.setItems(entries.map { makeListItem($0, now: now, calendar: calendar) })
     }
 
     private func makeListItem(_ entry: ClipEntry, now: Date, calendar: Calendar) -> ListItem {
@@ -346,18 +527,15 @@ final class TuiRunner {
     // MARK: - Signals
 
     private func setupSignals() {
-        // SIGWINCH for terminal resize
-        signal(SIGWINCH) { _ in
-            TuiRunner.resizeFlag = true
-        }
-
         // SIGINT/SIGTERM — restore terminal
         signal(SIGINT) { _ in
+            Terminal.disableMouse()
             Terminal.disableRawMode()
             TuiRunner.shared?.region.release()
             exit(0)
         }
         signal(SIGTERM) { _ in
+            Terminal.disableMouse()
             Terminal.disableRawMode()
             TuiRunner.shared?.region.release()
             exit(0)
@@ -365,6 +543,18 @@ final class TuiRunner {
     }
 
     // MARK: - Helpers
+
+    private static let stateFile = Config.defaultDir + "/tui-state"
+
+    static func loadPreviewLines() -> Int {
+        guard let str = try? String(contentsOfFile: stateFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+              let n = Int(str) else { return 3 }
+        return max(0, n)
+    }
+
+    static func savePreviewLines(_ n: Int) {
+        try? String(n).write(toFile: stateFile, atomically: true, encoding: .utf8)
+    }
 
     private func writeStderr(_ s: String) {
         FileHandle.standardError.write(s.data(using: .utf8)!)

@@ -42,19 +42,13 @@ struct ListState {
     var unsafeMode: Bool = false
     var message: String? = nil
     var messageExpiry: Date? = nil
+    var dividerHighlight: Bool = false
+    var previewLines: Int = 3
+    var previewScrollOffset: Int = 0
 
     mutating func setItems(_ items: [ListItem]) {
         allItems = items
-        filter()
-    }
-
-    mutating func filter() {
-        if query.isEmpty {
-            filteredItems = allItems
-        } else {
-            let q = query.lowercased()
-            filteredItems = allItems.filter { $0.preview.lowercased().contains(q) }
-        }
+        filteredItems = items
         // Clamp cursor
         if filteredItems.isEmpty {
             cursor = 0
@@ -67,6 +61,7 @@ struct ListState {
     mutating func moveCursor(by delta: Int, visibleRows: Int) {
         guard !filteredItems.isEmpty else { return }
         cursor = max(0, min(filteredItems.count - 1, cursor + delta))
+        previewScrollOffset = 0
         adjustScroll(visibleRows: visibleRows)
     }
 
@@ -118,15 +113,18 @@ struct ListState {
 // MARK: - ListRenderer
 
 enum ListRenderer {
-    // Layout: header(1) + preview(3) + separator(1) + list(N) + prompt(1)
+    // Layout: header(1) + preview(dynamic) + separator(1) + list(N) + prompt(1)
     static let headerLines = 1
-    static let previewLines = 3
     static let separatorLines = 1
     static let promptLines = 1
-    static let overhead = headerLines + previewLines + separatorLines + promptLines // 6
+    static let fixedOverhead = headerLines + separatorLines + promptLines // 3
 
-    static func visibleRows(regionHeight: Int) -> Int {
-        return max(1, regionHeight - overhead)
+    static func overhead(previewLines: Int) -> Int {
+        return fixedOverhead + previewLines
+    }
+
+    static func visibleRows(regionHeight: Int, previewLines: Int = 3) -> Int {
+        return max(1, regionHeight - overhead(previewLines: previewLines))
     }
 
     static func render(state: ListState, region: Region, termWidth: Int) -> ANSIBuffer {
@@ -134,7 +132,8 @@ enum ListRenderer {
         buf.hideCursor()
 
         let width = termWidth
-        let listRows = visibleRows(regionHeight: region.height)
+        let pvLines = state.previewLines
+        let listRows = visibleRows(regionHeight: region.height, previewLines: pvLines)
         var row = region.startRow
 
         // ── Header ──
@@ -149,15 +148,15 @@ enum ListRenderer {
         buf.write(" \u{1B}[38;5;243m\(countLabel)\u{1B}[0m") // gray count
 
         if state.unsafeMode {
-            buf.write("  \u{1B}[1;38;5;203m\u{26A0} UNSAFE\u{1B}[0m")
+            buf.write("  \u{1B}[1;38;5;203mUNSAFE\u{1B}[0m")
         }
 
         // Right side: hints or flash message
         let hints: String
         if let msg = state.message {
-            hints = " \u{2022} \(msg) "
+            hints = " - \(msg) "
         } else {
-            hints = "\u{23CE}=copy  \u{2303}O=stdout  \u{2303}D=del  \u{2303}P=pin  \u{2303}F=freq  \u{2303}B=branch"
+            hints = "enter=copy  ^O=stdout  ^D=del  ^P=pin  ^F=freq  ^B=branch"
         }
         let hintsStart = max(1, width - hints.count - 1)
         buf.moveTo(row: row, col: hintsStart)
@@ -166,11 +165,11 @@ enum ListRenderer {
 
         // ── Preview ──
         let selected = state.selectedItem
-        for i in 0..<previewLines {
+        for i in 0..<pvLines {
             buf.moveTo(row: row, col: 1)
             buf.clearLine()
             if let item = selected {
-                let previewText = previewLine(item: item, lineIndex: i, width: width)
+                let previewText = previewLine(item: item, lineIndex: i, scrollOffset: state.previewScrollOffset, width: width)
                 if !previewText.isEmpty {
                     buf.write("  \u{1B}[38;5;250m\(previewText)\u{1B}[0m")
                 }
@@ -178,12 +177,17 @@ enum ListRenderer {
             row += 1
         }
 
-        // ── Separator ──
+        // ── Separator (draggable divider) ──
         buf.moveTo(row: row, col: 1)
         buf.clearLine()
         let sepW = min(width, 120)
-        buf.write("\u{1B}[38;5;238m")
-        buf.write(String(repeating: "\u{2500}", count: sepW))
+        if state.dividerHighlight {
+            buf.write("\u{1B}[1;38;5;75m")  // bold blue when dragging
+            buf.write(String(repeating: "\u{2550}", count: sepW))  // double line ═
+        } else {
+            buf.write("\u{1B}[38;5;238m")
+            buf.write(String(repeating: "\u{2500}", count: sepW))
+        }
         buf.reset()
         row += 1
 
@@ -213,7 +217,7 @@ enum ListRenderer {
                 if idx < state.filteredItems.count {
                     let item = state.filteredItems[idx]
                     let isSelected = idx == state.cursor
-                    renderListItem(buf: &buf, item: item, selected: isSelected, width: width)
+                    renderListItem(buf: &buf, item: item, selected: isSelected, width: width, showCount: state.viewMode == .frequent)
                 }
                 row += 1
             }
@@ -222,27 +226,57 @@ enum ListRenderer {
         // ── Prompt ──
         buf.moveTo(row: row, col: 1)
         buf.clearLine()
-        buf.write(" \u{1B}[38;5;75m\u{25B8}\u{1B}[0m ")  // blue arrow
+        buf.write(" \u{1B}[38;5;75m>\u{1B}[0m ")
         buf.write(state.query)
         buf.showCursor()
 
         return buf
     }
 
-    /// 256-color heat based on age (logarithmic bands, subdued palette)
-    private static func heatColor(for item: ListItem) -> Int {
-        let age = -item.entry.timestamp.timeIntervalSinceNow
-        if age < 3600        { return 174 }  // < 1h   muted rose
-        if age < 6 * 3600    { return 180 }  // < 6h   warm tan
-        if age < 86400       { return 186 }  // < 1d   soft wheat
-        if age < 3 * 86400   { return 115 }  // < 3d   sage green
-        if age < 7 * 86400   { return 109 }  // < 1w   muted teal
-        if age < 30 * 86400  { return 103 }  // < 1mo  dusty blue
-        if age < 90 * 86400  { return 139 }  // < 3mo  muted lavender
-        return 245                            // older  dim gray
+    /// Greyscale values for newest and oldest items, mapped to 232-255 range.
+    /// Updated dynamically from terminal OSC queries.
+    static var newestGrey: Int = 255
+    static var oldestGrey: Int = 236
+
+    /// Update from terminal luminance values (0.0-1.0).
+    static func updateColors(fgLuminance: Double, bgLuminance: Double) {
+        let darkMode = bgLuminance < 0.5
+
+        // Map to 232-255 greyscale
+        let fgG = 232 + Int(round(fgLuminance * 23.0))
+        let bgG = 232 + Int(round(bgLuminance * 23.0))
+
+        // Newest: 30% brighter/darker than fg, away from bg
+        let boost = Int(round(23.0 * 0.3))
+        if darkMode {
+            newestGrey = min(255, fgG + boost)
+        } else {
+            newestGrey = max(232, fgG - boost)
+        }
+
+        // Oldest: 80% of the way from fg toward bg
+        oldestGrey = fgG + Int(round(0.8 * Double(bgG - fgG)))
+        oldestGrey = max(232, min(255, oldestGrey))
     }
 
-    private static func renderListItem(buf: inout ANSIBuffer, item: ListItem, selected: Bool, width: Int) {
+    /// Grey gradient based on age — interpolates between newest and oldest grey.
+    private static func heatColor(for item: ListItem) -> Int {
+        let age = -item.entry.timestamp.timeIntervalSinceNow
+        let t: Double  // 0.0 = newest, 1.0 = oldest
+        if age < 600          { t = 0.0 }
+        else if age < 3600    { t = 0.15 }
+        else if age < 6*3600  { t = 0.3 }
+        else if age < 86400   { t = 0.45 }
+        else if age < 3*86400 { t = 0.6 }
+        else if age < 7*86400 { t = 0.75 }
+        else if age < 30*86400 { t = 0.9 }
+        else                  { t = 1.0 }
+
+        let grey = Double(newestGrey) + t * Double(oldestGrey - newestGrey)
+        return max(232, min(255, Int(round(grey))))
+    }
+
+    private static func renderListItem(buf: inout ANSIBuffer, item: ListItem, selected: Bool, width: Int, showCount: Bool = false) {
         let heat = heatColor(for: item)
 
         // Right-align age in 3 chars
@@ -252,12 +286,13 @@ enum ListRenderer {
 
         // Build plain-text badges
         var badgeTxt = ""
-        if item.pinned { badgeTxt += "\u{272A} " }
-        if item.copyCount > 1 { badgeTxt += "\u{00D7}\(item.copyCount) " }
+        if showCount && item.copyCount > 1 { badgeTxt += "x\(item.copyCount) " }
+        if item.sensitive { badgeTxt += "[sensitive] " }
+        if item.pinned { badgeTxt += "[pin] " }
         if item.branch != "main" { badgeTxt += "\(item.branch) " }
 
-        // marker(2) + age(3) + space(1) + badges + preview
-        let metaWidth = 2 + 3 + 1 + badgeTxt.count
+        // marker(1) + age(3) + space(1) + badges + preview
+        let metaWidth = 1 + 3 + 1 + badgeTxt.count
         let maxPreview = max(10, width - metaWidth - 1)
 
         var preview = item.preview
@@ -266,31 +301,29 @@ enum ListRenderer {
 
         if item.sensitive {
             let visible = String(preview.prefix(8))
-            let masked = String(repeating: "\u{2022}", count: min(max(0, preview.count - 8), 20))
-            preview = "\u{1F512} \(visible)\(masked)"
+            let masked = String(repeating: "*", count: min(max(0, preview.count - 8), 20))
+            preview = "\(visible)\(masked)"
         }
 
         preview = String(preview.prefix(maxPreview))
 
         if selected {
-            // One unbroken inverted bar — warm white foreground
-            let line = " \u{25B8} \(ageStr) \(badgeTxt)\(preview)"
-            // Pad to full width for unbroken bar
+            let line = ">\(ageStr) \(badgeTxt)\(preview)"
             let padded = line.count < width ? line + String(repeating: " ", count: width - line.count) : line
-            buf.write("\u{1B}[7;38;5;230m\(padded)\u{1B}[0m")
+            buf.write("\u{1B}[1;7;38;5;230m\(padded)\u{1B}[0m")
         } else {
-            buf.write("   ")
+            buf.write(" ")
             buf.write("\u{1B}[38;5;\(heat)m\(ageStr)\u{1B}[0m ")
-            // Colored badges
-            if item.pinned { buf.write("\u{1B}[38;5;222m\u{272A}\u{1B}[0m ") }
-            if item.copyCount > 1 { buf.write("\u{1B}[38;5;116m\u{00D7}\(item.copyCount)\u{1B}[0m ") }
+            if showCount && item.copyCount > 1 { buf.write("\u{1B}[38;5;116mx\(item.copyCount)\u{1B}[0m ") }
+            if item.sensitive { buf.write("\u{1B}[38;5;167m[sensitive]\u{1B}[0m ") }
+            if item.pinned { buf.write("\u{1B}[38;5;222m[pin]\u{1B}[0m ") }
             if item.branch != "main" { buf.write("\u{1B}[38;5;176m\(item.branch)\u{1B}[0m ") }
             let textColor = item.sensitive ? "38;5;167" : "38;5;\(heat)"
             buf.write("\u{1B}[\(textColor)m\(preview)\u{1B}[0m")
         }
     }
 
-    private static func previewLine(item: ListItem, lineIndex: Int, width: Int) -> String {
+    private static func previewLine(item: ListItem, lineIndex: Int, scrollOffset: Int, width: Int) -> String {
         if item.sensitive {
             if lineIndex == 0 { return "[sensitive content]" }
             return ""
@@ -308,7 +341,7 @@ enum ListRenderer {
             break
         }
 
-        return textPreviewLine(item: item, lineIndex: lineIndex, maxWidth: maxWidth)
+        return textPreviewLine(item: item, lineIndex: lineIndex + scrollOffset, maxWidth: maxWidth)
     }
 
     private static func imagePreviewLine(item: ListItem, lineIndex: Int, maxWidth: Int) -> String {
@@ -317,16 +350,16 @@ enum ListRenderer {
 
         switch lineIndex {
         case 0:
-            var parts = ["\u{1F5BC}  Image"]
-            if let d = info.dimensions { parts.append("\(d.w) \u{00D7} \(d.h)") }
+            var parts: [String] = ["Image"]
+            if let d = info.dimensions { parts.append("\(d.w)x\(d.h)") }
             parts.append(sizeStr)
             if let fmt = info.format { parts.append(fmt.uppercased()) }
-            return parts.joined(separator: " \u{2022} ")
+            return parts.joined(separator: " | ")
         case 1:
             var parts: [String] = []
             if let app = item.entry.sourceApp { parts.append("from \(app)") }
             if let reps = info.representations, reps > 1 { parts.append("\(reps) representations") }
-            return parts.isEmpty ? "" : parts.joined(separator: " \u{2022} ")
+            return parts.isEmpty ? "" : parts.joined(separator: " | ")
         case 2:
             // Show stored UTI types
             if let utis = info.utis, !utis.isEmpty {
@@ -342,7 +375,7 @@ enum ListRenderer {
         switch lineIndex {
         case 0:
             let sizeStr = formatSize(item.entry.totalSize)
-            return "\u{1F4C1}  File \u{2022} \(sizeStr)"
+            return "File | \(sizeStr)"
         case 1:
             return item.preview
         case 2:
@@ -358,12 +391,17 @@ enum ListRenderer {
         guard lineIndex < lines.count else { return "" }
         let line = lines[lineIndex]
         if line.count > maxWidth {
-            return String(line.prefix(maxWidth - 1)) + "\u{2026}"
+            return String(line.prefix(maxWidth - 1)) + "..."
         }
         return line
     }
 
-    private static func formatSize(_ bytes: Int) -> String {
+    static func previewTotalLines(item: ListItem) -> Int {
+        guard item.type == .text && !item.sensitive else { return 0 }
+        return item.preview.components(separatedBy: "\\n").count
+    }
+
+    static func formatSize(_ bytes: Int) -> String {
         if bytes < 1024 { return "\(bytes) B" }
         let kb = bytes / 1024
         if kb < 1024 { return "\(kb) KB" }

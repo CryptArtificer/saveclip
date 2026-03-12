@@ -19,7 +19,11 @@ and restore entries instantly.
 ## Features
 
 - **Full fidelity** — stores every pasteboard representation (rich text, HTML, images, source URLs), not just plain text
-- **Built-in TUI** — native terminal picker with search, preview, and inline actions (no fzf dependency)
+- **Built-in TUI** — native terminal picker with FTS5 search, preview panel, mouse support, and inline actions (no fzf dependency)
+- **Auto-refresh** — TUI updates live as new clipboard entries arrive
+- **Mouse support** — click to select, double-click to copy, scroll wheel, draggable preview/list divider
+- **Adaptive colors** — detects terminal fg/bg colors via OSC 10/11, age-based grey gradient that works in dark and light modes, reacts to theme changes live
+- **Deduplication** — identical content is merged, most recent timestamp wins
 - **Branches** — organize clips by context (auto-route by app, manual switch)
 - **Sensitive detection** — auto-flags AWS keys, GitHub PATs, SSH keys, JWTs, etc.
 - **Frequency tracking** — surfaces repeatedly copied entries
@@ -52,50 +56,52 @@ source ~/.zsh/saveclip.zsh
   just a regular note
   second line of preview if present
 ────────────────────────────────────────────────────────────
-▸ 38  27m   just a regular note
-  37  28m   [sensitive] AKIAIOSF••••••••••••
-  36  28m * normal safe text
-  35  28m   ssh-ed25519 AAAAC3Nza...
-  34  30m   safe normal text
-  33  31m   [work] Slack message content here
-  32  35m   SELECT * FROM users WHERE id = 42
-  31  40m   const handler = async (req, res) => {...}
-search clipboard> _
+> 38  27m  just a regular note
+  37  28m  [sensitive] AKIAIOSF********************
+  36  28m  [pin] normal safe text
+  35  28m  ssh-ed25519 AAAAC3Nza...
+  34  30m  safe normal text
+  33  31m  [work] Slack message content here
+  32  35m  SELECT * FROM users WHERE id = 42
+  31  40m  const handler = async (req, res) => {...}
+ > _
 ```
 
-Type to filter, arrows to navigate, enter to copy back to clipboard.
-All actions happen inline — no subprocesses, no flicker.
+Type to search (FTS5 prefix matching), arrows or mouse to navigate, enter or
+double-click to copy back to clipboard. Selected text (<1KB) is emitted to
+stdout for `print -z` shell integration. The preview/list divider is draggable
+and its size persists across sessions.
 
 ## Usage
 
 ```sh
 # Start the daemon
-clip start
+clb start
 
 # Open interactive picker (TUI)
-clip
+clb
 
 # Search
-clip search <query>
+clb search <query>
 
 # List recent entries
-clip list
-clip list --all
+clb list
+clb list --all
 
 # Copy entry back to clipboard
-clip <id>
-clip get <id> -o    # print to stdout instead
+clb <id>
+clb get <id> -o    # print to stdout instead
 
 # Manage entries
-clip pin <id>
-clip delete <id>
-clip clear
+clb pin <id>
+clb delete <id>
+clb clear
 
 # Branches
-clip branch            # show current
-clip branch work       # switch
-clip branches          # list all
-clip move <id> <branch>
+clb branch            # show current
+clb branch work       # switch
+clb branches          # list all
+clb move <id> <branch>
 ```
 
 ### TUI keybindings
@@ -109,10 +115,19 @@ clip move <id> <branch>
 | Ctrl-F | Toggle frequent view |
 | Ctrl-B | Toggle branch filter |
 | Ctrl-R | Reload from DB |
-| Up/Down | Navigate |
+| Up/Down / Scroll | Navigate |
 | PgUp/PgDn | Page scroll |
-| Typing | Filter entries |
+| Click / Double-click | Select / Copy |
+| Drag divider | Resize preview panel |
+| Typing | Search entries (FTS5) |
 | Esc / Ctrl-C | Exit |
+
+### Mouse support
+
+- **Scroll wheel** in the list area moves the selection cursor
+- **Scroll wheel** in the preview area scrolls preview content
+- **Click** selects an item, **double-click** copies it
+- **Drag the divider** between preview and list to resize (persisted to `~/.saveclip/tui-state`)
 
 ## Configuration
 

@@ -85,10 +85,16 @@ clb() {
     fi
   done
 
+  local result
   if [[ ${#query_parts[@]} -gt 0 ]]; then
-    "$bin" tui "${flags[@]}" --query "${query_parts[*]}"
+    result=$("$bin" tui "${flags[@]}" --query "${query_parts[*]}")
   else
-    "$bin" tui "${flags[@]}"
+    result=$("$bin" tui "${flags[@]}")
+  fi
+
+  # Put selected text on the command line
+  if [[ -n "$result" ]]; then
+    print -z -- "$result"
   fi
 }
 

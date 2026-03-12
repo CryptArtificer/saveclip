@@ -14,6 +14,11 @@ enum Key: Equatable {
     case backspace
     case delete
     case tab
+    case scrollUp(row: Int, col: Int), scrollDown(row: Int, col: Int)
+    case mouseClick(row: Int, col: Int)
+    case mouseDrag(row: Int, col: Int)
+    case mouseRelease(row: Int, col: Int)
+    case ignored
 }
 
 // MARK: - ANSIBuffer
@@ -83,44 +88,119 @@ struct Terminal {
         }
     }
 
+    static func enableMouse() {
+        // SGR mouse mode (1006) with button tracking (1002) for scroll + click
+        FileHandle.standardError.write("\u{1B}[?1002h\u{1B}[?1006h".data(using: .utf8)!)
+    }
+
+    static func disableMouse() {
+        FileHandle.standardError.write("\u{1B}[?1006l\u{1B}[?1002l".data(using: .utf8)!)
+    }
+
     static func size() -> (cols: Int, rows: Int) {
         var ws = winsize()
-        if ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 {
-            // Try stderr (stdout might be piped)
-            if ioctl(STDERR_FILENO, TIOCGWINSZ, &ws) == -1 {
-                return (cols: 80, rows: 24)
-            }
+        // Try stdin first — most reliable when stdout is piped via $()
+        if ioctl(STDIN_FILENO, TIOCGWINSZ, &ws) == 0 {
+            return (cols: Int(ws.ws_col), rows: Int(ws.ws_row))
         }
-        return (cols: Int(ws.ws_col), rows: Int(ws.ws_row))
+        if ioctl(STDERR_FILENO, TIOCGWINSZ, &ws) == 0 {
+            return (cols: Int(ws.ws_col), rows: Int(ws.ws_row))
+        }
+        if ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 {
+            return (cols: Int(ws.ws_col), rows: Int(ws.ws_row))
+        }
+        return (cols: 80, rows: 24)
     }
 
     static func isTTY() -> Bool {
         return isatty(STDIN_FILENO) != 0
     }
 
+    /// Query terminal foreground and background luminance via OSC 10/11. Requires raw mode.
+    /// Returns (fgLuminance, bgLuminance) in 0.0-1.0 range, or nil if detection fails.
+    static func queryColors() -> (fg: Double, bg: Double)? {
+        // Query both fg (OSC 10) and bg (OSC 11) in one go
+        FileHandle.standardError.write("\u{1B}]10;?\u{07}\u{1B}]11;?\u{07}".data(using: .utf8)!)
+
+        var fg: Double?
+        var bg: Double?
+
+        for _ in 0..<2 {
+            var response: [UInt8] = []
+            var b: UInt8 = 0
+            while read(STDIN_FILENO, &b, 1) == 1 {
+                response.append(b)
+                if b == 0x07 || b == 0x5C || b == 77 || b == 109 { break }
+                if response.count > 64 { break }
+            }
+            guard let str = String(bytes: response, encoding: .ascii),
+                  let rgbRange = str.range(of: "rgb:") else { continue }
+
+            let lum = parseRGBLuminance(String(str[rgbRange.upperBound...]))
+
+            if str.contains(";10;") || str.contains("]10;") {
+                fg = lum
+            } else {
+                bg = lum
+            }
+        }
+
+        guard let f = fg, let b = bg else { return nil }
+        return (fg: f, bg: b)
+    }
+
+    private static func parseRGBLuminance(_ rgb: String) -> Double? {
+        let components = rgb.split(separator: "/")
+        guard components.count == 3 else { return nil }
+
+        func parseComponent(_ s: Substring) -> Double {
+            let cleaned = s.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+            guard let val = UInt32(cleaned, radix: 16) else { return 0 }
+            if cleaned.count <= 2 { return Double(val) / 255.0 }
+            return Double(val) / 65535.0
+        }
+
+        let r = parseComponent(components[0])
+        let g = parseComponent(components[1])
+        let b = parseComponent(components[2])
+        return 0.299 * r + 0.587 * g + 0.114 * b
+    }
+
     /// Query current cursor position via DSR. Requires raw mode.
+    /// Drains any queued mouse events before reading the response.
     static func cursorPosition() -> (row: Int, col: Int)? {
         // Send Device Status Report
         FileHandle.standardError.write("\u{1B}[6n".data(using: .utf8)!)
 
         // Read response: ESC [ <row> ; <col> R
-        var response: [UInt8] = []
-        var b: UInt8 = 0
-        while read(STDIN_FILENO, &b, 1) == 1 {
-            response.append(b)
-            if b == 82 { break } // 'R'
-            if response.count > 20 { return nil }
+        // Skip any queued mouse events (ESC [ < ... M/m)
+        var attempts = 0
+        while attempts < 5 {
+            attempts += 1
+            var response: [UInt8] = []
+            var b: UInt8 = 0
+            while read(STDIN_FILENO, &b, 1) == 1 {
+                response.append(b)
+                // DSR response ends with 'R'
+                if b == 82 { // 'R'
+                    if let str = String(bytes: response, encoding: .ascii),
+                       str.hasPrefix("\u{1B}["), str.hasSuffix("R") {
+                        let inner = str.dropFirst(2).dropLast(1)
+                        let parts = inner.split(separator: ";")
+                        if parts.count == 2,
+                           let row = Int(parts[0]),
+                           let col = Int(parts[1]) {
+                            return (row: row, col: col)
+                        }
+                    }
+                    break
+                }
+                // Mouse event ends with 'M' or 'm' — discard and retry
+                if b == 77 || b == 109 { break }
+                if response.count > 32 { break }
+            }
         }
-
-        guard let str = String(bytes: response, encoding: .ascii),
-              str.hasPrefix("\u{1B}["), str.hasSuffix("R") else { return nil }
-
-        let inner = str.dropFirst(2).dropLast(1)
-        let parts = inner.split(separator: ";")
-        guard parts.count == 2,
-              let row = Int(parts[0]),
-              let col = Int(parts[1]) else { return nil }
-        return (row: row, col: col)
+        return nil
     }
 
     /// Read a key from stdin. Returns nil on timeout / no input.
@@ -160,6 +240,9 @@ struct Terminal {
         if read(STDIN_FILENO, &seq[1], 1) != 1 { return .escape }
 
         if seq[0] == 91 { // ESC [
+            // SGR mouse: ESC [ < Cb ; Cx ; Cy M/m
+            if seq[1] == 60 { return readSGRMouse() }
+
             switch seq[1] {
             case 65: return .up
             case 66: return .down
@@ -218,6 +301,50 @@ struct Terminal {
         return .escape
     }
 
+    /// Parse SGR mouse sequence: params are "Cb;Cx;Cy" terminated by M (press) or m (release)
+    private static func readSGRMouse() -> Key {
+        var params: [UInt8] = []
+        var b: UInt8 = 0
+        while read(STDIN_FILENO, &b, 1) == 1 {
+            if b == 77 || b == 109 { break } // 'M' or 'm'
+            params.append(b)
+            if params.count > 20 { return .ignored }
+        }
+        let str = String(bytes: params, encoding: .ascii) ?? ""
+        let parts = str.split(separator: ";")
+        guard parts.count == 3,
+              let cb = Int(parts[0]),
+              let cx = Int(parts[1]),
+              let cy = Int(parts[2]) else { return .ignored }
+
+        let isRelease = b == 109 // 'm'
+        let button = cb & 0x03
+        let isScroll = (cb & 64) != 0
+
+        if isScroll {
+            return button == 0 ? .scrollUp(row: cy, col: cx) : .scrollDown(row: cy, col: cx)
+        }
+
+        let isMotion = (cb & 32) != 0
+
+        // Button release
+        if isRelease {
+            return .mouseRelease(row: cy, col: cx)
+        }
+
+        // Drag (motion with button held)
+        if isMotion && button == 0 {
+            return .mouseDrag(row: cy, col: cx)
+        }
+
+        // Click (press)
+        if button == 0 {
+            return .mouseClick(row: cy, col: cx)
+        }
+
+        return .ignored
+    }
+
     private static func readUTF8(firstByte: UInt8) -> Key {
         var bytes: [UInt8] = [firstByte]
         let expectedLen: Int
@@ -244,7 +371,7 @@ struct Terminal {
 final class Region {
     private(set) var height: Int
     private(set) var startRow: Int
-    private let requestedHeight: Int
+    private var requestedHeight: Int
 
     init(height: Int) {
         self.requestedHeight = height
@@ -273,17 +400,47 @@ final class Region {
     }
 
     /// Recalculate after terminal resize.
-    /// Moves the cursor to the bottom of the new region and re-anchors.
     func handleResize() {
-        let (_, rows) = Terminal.size()
+        let (cols, rows) = Terminal.size()
+        let oldHeight = self.height
+        let oldStart = self.startRow
         self.height = min(requestedHeight, rows)
-        // Keep region anchored at the bottom of the visible terminal
-        self.startRow = max(1, rows - self.height + 1)
-        // Move cursor to bottom of region so next render is clean
+
+        Region.rlog("handleResize: old=\(oldStart)+\(oldHeight) newTermSize=\(cols)x\(rows) newH=\(self.height) reqH=\(requestedHeight)")
+
+        // Clear the old region (might be at wrong position after reflow)
         var buf = ANSIBuffer()
-        buf.moveTo(row: startRow + height - 1, col: 1)
+        for row in oldStart...min(oldStart + oldHeight - 1, rows + 50) {
+            buf.moveTo(row: row, col: 1)
+            buf.clearLine()
+        }
+
+        // Move to bottom of terminal and print newlines to claim space
+        buf.moveTo(row: rows, col: 1)
+        for _ in 0..<self.height {
+            buf.write("\n")
+        }
         buf.flush()
+
+        // Re-query cursor position to find where we ended up
+        if let pos = Terminal.cursorPosition() {
+            self.startRow = max(1, pos.row - self.height + 1)
+            Region.rlog("  DSR got row=\(pos.row) col=\(pos.col) -> startRow=\(self.startRow)")
+        } else {
+            self.startRow = max(1, rows - self.height + 1)
+            Region.rlog("  DSR FAILED, fallback startRow=\(self.startRow)")
+        }
     }
+
+    private static func rlog(_ msg: String) {
+        let ts = String(format: "%.3f", Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 10000))
+        if let fh = FileHandle(forWritingAtPath: "/tmp/saveclip-resize.log") {
+            fh.seekToEndOfFile()
+            fh.write("[\(ts)] \(msg)\n".data(using: .utf8)!)
+            fh.closeFile()
+        }
+    }
+
 
     func release() {
         var buf = ANSIBuffer()

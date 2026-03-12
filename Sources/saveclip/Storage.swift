@@ -43,6 +43,28 @@ final class Storage {
         try execute("CREATE INDEX IF NOT EXISTS idx_clips_hash ON clips(hash)")
         try execute("CREATE INDEX IF NOT EXISTS idx_clips_timestamp ON clips(timestamp DESC)")
         try execute("CREATE INDEX IF NOT EXISTS idx_clips_branch ON clips(branch)")
+
+        // FTS5 full-text search on preview
+        try execute("CREATE VIRTUAL TABLE IF NOT EXISTS clips_fts USING fts5(preview, content='clips', content_rowid='id')")
+        // Triggers to keep FTS in sync
+        try? execute("""
+            CREATE TRIGGER IF NOT EXISTS clips_ai AFTER INSERT ON clips BEGIN
+                INSERT INTO clips_fts(rowid, preview) VALUES (new.id, new.preview);
+            END
+        """)
+        try? execute("""
+            CREATE TRIGGER IF NOT EXISTS clips_ad AFTER DELETE ON clips BEGIN
+                INSERT INTO clips_fts(clips_fts, rowid, preview) VALUES ('delete', old.id, old.preview);
+            END
+        """)
+        try? execute("""
+            CREATE TRIGGER IF NOT EXISTS clips_au AFTER UPDATE ON clips BEGIN
+                INSERT INTO clips_fts(clips_fts, rowid, preview) VALUES ('delete', old.id, old.preview);
+                INSERT INTO clips_fts(rowid, preview) VALUES (new.id, new.preview);
+            END
+        """)
+        // Rebuild FTS index from existing data (fast, idempotent)
+        try? execute("INSERT INTO clips_fts(clips_fts) VALUES ('rebuild')")
     }
 
     deinit {
@@ -53,7 +75,7 @@ final class Storage {
 
     /// Check if this hash was recently saved. If so, bump its copy_count and timestamp.
     func isDuplicate(hash: String, lookback: Int = 20) -> Bool {
-        let query = "SELECT id FROM (SELECT id, hash FROM clips ORDER BY id DESC LIMIT ?) WHERE hash = ? LIMIT 1"
+        let query = "SELECT id FROM (SELECT id, hash FROM clips ORDER BY timestamp DESC LIMIT ?) WHERE hash = ? LIMIT 1"
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
 
@@ -135,12 +157,23 @@ final class Storage {
 
     // MARK: - Read
 
+    func latestTimestamp() -> Double? {
+        let sql = "SELECT MAX(timestamp) FROM clips"
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK,
+              sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return sqlite3_column_double(stmt, 0)
+    }
+
     func list(limit: Int = 20, branch: String? = nil) -> [ClipEntry] {
+        // Deduplicate by hash — keep the entry with the latest timestamp per unique content
+        let dedup = "(SELECT id FROM clips c2 WHERE c2.hash = clips.hash ORDER BY c2.timestamp DESC LIMIT 1)"
         let sql: String
         if let branch = branch {
-            sql = "SELECT \(selectCols) FROM clips WHERE branch = '\(branch.replacingOccurrences(of: "'", with: "''"))' ORDER BY id DESC LIMIT ?"
+            sql = "SELECT \(selectCols) FROM clips WHERE branch = '\(branch.replacingOccurrences(of: "'", with: "''"))' AND id = \(dedup) ORDER BY timestamp DESC LIMIT ?"
         } else {
-            sql = "SELECT \(selectCols) FROM clips ORDER BY id DESC LIMIT ?"
+            sql = "SELECT \(selectCols) FROM clips WHERE id = \(dedup) ORDER BY timestamp DESC LIMIT ?"
         }
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
@@ -171,12 +204,50 @@ final class Storage {
         return nil
     }
 
-    func search(query searchTerm: String, limit: Int = 20, branch: String? = nil) -> [ClipEntry] {
+    func search(query searchTerm: String, limit: Int = 200, branch: String? = nil) -> [ClipEntry] {
+        // Escape FTS5 special chars and add prefix matching
+        let escaped = searchTerm
+            .replacingOccurrences(of: "\"", with: "\"\"")
+        let ftsQuery = "\"\(escaped)\"*"
+
         let sql: String
         if let branch = branch {
-            sql = "SELECT \(selectCols) FROM clips WHERE preview LIKE ? AND branch = '\(branch.replacingOccurrences(of: "'", with: "''"))' ORDER BY id DESC LIMIT ?"
+            sql = "SELECT \(selectCols) FROM clips WHERE id IN (SELECT rowid FROM clips_fts WHERE clips_fts MATCH ?) AND branch = ? ORDER BY timestamp DESC LIMIT ?"
         } else {
-            sql = "SELECT \(selectCols) FROM clips WHERE preview LIKE ? ORDER BY id DESC LIMIT ?"
+            sql = "SELECT \(selectCols) FROM clips WHERE id IN (SELECT rowid FROM clips_fts WHERE clips_fts MATCH ?) ORDER BY timestamp DESC LIMIT ?"
+        }
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            return searchFallback(searchTerm: searchTerm, limit: limit, branch: branch)
+        }
+        sqlite3_bind_text(stmt, 1, (ftsQuery as NSString).utf8String, -1, nil)
+        if let branch = branch {
+            sqlite3_bind_text(stmt, 2, (branch as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 3, Int32(limit))
+        } else {
+            sqlite3_bind_int(stmt, 2, Int32(limit))
+        }
+
+        var entries: [ClipEntry] = []
+        var seenHashes = Set<String>()
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let entry = readRow(stmt) {
+                if seenHashes.insert(entry.hash).inserted {
+                    entries.append(entry)
+                }
+            }
+        }
+        return entries
+    }
+
+    private func searchFallback(searchTerm: String, limit: Int, branch: String?) -> [ClipEntry] {
+        let sql: String
+        if let branch = branch {
+            sql = "SELECT \(selectCols) FROM clips WHERE preview LIKE ? AND branch = ? ORDER BY timestamp DESC LIMIT ?"
+        } else {
+            sql = "SELECT \(selectCols) FROM clips WHERE preview LIKE ? ORDER BY timestamp DESC LIMIT ?"
         }
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
@@ -184,7 +255,12 @@ final class Storage {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
         let pattern = "%\(searchTerm)%"
         sqlite3_bind_text(stmt, 1, (pattern as NSString).utf8String, -1, nil)
-        sqlite3_bind_int(stmt, 2, Int32(limit))
+        if let branch = branch {
+            sqlite3_bind_text(stmt, 2, (branch as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 3, Int32(limit))
+        } else {
+            sqlite3_bind_int(stmt, 2, Int32(limit))
+        }
 
         var entries: [ClipEntry] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
@@ -276,6 +352,10 @@ final class Storage {
 
     func unpin(id: Int64) throws {
         try execute("UPDATE clips SET pinned = 0 WHERE id = \(id)")
+    }
+
+    func bumpToFront(id: Int64) throws {
+        try execute("UPDATE clips SET copy_count = copy_count + 1, timestamp = \(Date().timeIntervalSince1970) WHERE id = \(id)")
     }
 
     func delete(id: Int64) throws {
