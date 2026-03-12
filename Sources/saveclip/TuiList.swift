@@ -39,6 +39,7 @@ struct ListState {
     var cursor: Int = 0
     var scrollOffset: Int = 0
     var viewMode: ViewMode = .all
+    var unsafeMode: Bool = false
     var message: String? = nil
     var messageExpiry: Date? = nil
 
@@ -148,12 +149,19 @@ enum ListRenderer {
         buf.write(" \(countLabel)")
         buf.reset()
 
+        if state.unsafeMode {
+            buf.write(" ")
+            buf.style("1;31") // bold red
+            buf.write(" UNSAFE ")
+            buf.reset()
+        }
+
         // Keybind hints (right-aligned)
         let hints: String
         if let msg = state.message {
             hints = " \(msg) "
         } else {
-            hints = "enter=copy  ^O=stdout  ^D=del  ^P=pin  ^F=freq  ^B=branch"
+            hints = "enter=copy  ^O=stdout  ^D=del  ^P=pin  ^U=unsafe"
         }
         let hintsStart = max(1, width - hints.count)
         buf.moveTo(row: row, col: hintsStart)

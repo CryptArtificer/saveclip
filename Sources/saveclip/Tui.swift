@@ -225,6 +225,13 @@ final class TuiRunner {
                 state.flash("Reloaded")
                 needsRender = true
 
+            case .ctrl("u"):
+                state.unsafeMode.toggle()
+                state.flash(state.unsafeMode ? "UNSAFE — secrets visible" : "Safe mode")
+                loadEntries()
+                state.filter()
+                needsRender = true
+
             case .up:
                 state.moveCursor(by: -1, visibleRows: visibleRows)
                 needsRender = true
@@ -297,6 +304,13 @@ final class TuiRunner {
 
     private func makeListItem(_ entry: ClipEntry, now: Date, calendar: Calendar) -> ListItem {
         let age = relativeTime(from: entry.timestamp, to: now, calendar: calendar)
+        // TUI-side sensitive detection (broader than daemon's capture-time check)
+        let sensitive: Bool
+        if state.unsafeMode {
+            sensitive = false
+        } else {
+            sensitive = entry.sensitive || (entry.type == .text && SensitiveDetector.isSensitive(entry.preview))
+        }
         return ListItem(
             id: entry.id,
             age: age,
@@ -305,7 +319,7 @@ final class TuiRunner {
             branch: entry.branch,
             type: entry.type,
             preview: entry.preview,
-            sensitive: entry.sensitive,
+            sensitive: sensitive,
             entry: entry
         )
     }
