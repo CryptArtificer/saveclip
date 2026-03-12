@@ -287,11 +287,12 @@ enum ListRenderer {
         let textColor = item.sensitive ? "38;5;167" : "38;5;\(heat)"
 
         if selected {
-            buf.write(" \u{1B}[38;5;229m\u{25B8}\u{1B}[0m")            // light yellow arrow
-            buf.write("\u{1B}[38;5;229m\(idStr)\u{1B}[0m")             // light yellow id
-            buf.write(" \u{1B}[38;5;\(heat)m\(ageStr)\u{1B}[0m")
-            buf.write(" \(badges)")
-            buf.write("\u{1B}[38;5;230m\(preview)\u{1B}[0m")           // warm white preview
+            // Inverted bar in warm white
+            buf.write("\u{1B}[7;38;5;230m \u{25B8}\u{1B}[0m")
+            buf.write("\u{1B}[7;38;5;248m\(idStr)\u{1B}[0m")
+            buf.write("\u{1B}[7;38;5;\(heat)m \(ageStr)\u{1B}[0m")
+            buf.write("\u{1B}[7m \(badges)\u{1B}[0m")
+            buf.write("\u{1B}[7;38;5;230m\(preview)\u{1B}[0m")
         } else {
             buf.write("  ")
             buf.write("\u{1B}[38;5;242m\(idStr)\u{1B}[0m")
@@ -335,25 +336,11 @@ enum ListRenderer {
 
         switch lineIndex {
         case 0:
-            let dimsStr = dims.map { "\($0.w)\u{00D7}\($0.h)" } ?? "unknown size"
-            return "\u{1F5BC}  Image \u{2022} \(dimsStr) \u{2022} \(sizeStr)"
-        case 1:
-            if let d = dims {
-                // Mini ASCII thumbnail hint
-                let aspect = Double(d.w) / Double(d.h)
-                let barW = min(max(Int(aspect * 6), 2), 20)
-                let border = String(repeating: "\u{2591}", count: barW)
-                return "\u{250C}\(border)\u{2510}  \(item.entry.sourceApp ?? "")"
+            let dimsStr = dims.map { "\($0.w) \u{00D7} \($0.h)" } ?? ""
+            if dimsStr.isEmpty {
+                return "Image \u{2022} \(sizeStr)"
             }
-            return item.entry.sourceApp ?? ""
-        case 2:
-            if let d = dims {
-                let aspect = Double(d.w) / Double(d.h)
-                let barW = min(max(Int(aspect * 6), 2), 20)
-                let border = String(repeating: "\u{2591}", count: barW)
-                return "\u{2514}\(border)\u{2518}"
-            }
-            return ""
+            return "Image \u{2022} \(dimsStr) \u{2022} \(sizeStr)"
         default:
             return ""
         }

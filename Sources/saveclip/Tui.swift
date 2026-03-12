@@ -121,8 +121,6 @@ final class TuiRunner {
         loadEntries()
         state.filter()
 
-        let visibleRows = ListRenderer.visibleRows(regionHeight: region.height)
-
         // Main event loop
         while true {
             state.clearExpiredMessage()
@@ -137,6 +135,7 @@ final class TuiRunner {
             // Check resize flag
             if TuiRunner.resizeFlag {
                 TuiRunner.resizeFlag = false
+                region.handleResize()
                 needsRender = true
                 continue
             }
@@ -231,27 +230,27 @@ final class TuiRunner {
 
 
             case .up:
-                state.moveCursor(by: 1, visibleRows: visibleRows)
+                state.moveCursor(by: 1, visibleRows: ListRenderer.visibleRows(regionHeight: region.height))
                 needsRender = true
 
             case .down:
-                state.moveCursor(by: -1, visibleRows: visibleRows)
+                state.moveCursor(by: -1, visibleRows: ListRenderer.visibleRows(regionHeight: region.height))
                 needsRender = true
 
             case .pageUp:
-                state.pageDown(visibleRows: visibleRows)
+                state.pageDown(visibleRows: ListRenderer.visibleRows(regionHeight: region.height))
                 needsRender = true
 
             case .pageDown:
-                state.pageUp(visibleRows: visibleRows)
+                state.pageUp(visibleRows: ListRenderer.visibleRows(regionHeight: region.height))
                 needsRender = true
 
             case .home:
-                state.home(visibleRows: visibleRows)
+                state.home(visibleRows: ListRenderer.visibleRows(regionHeight: region.height))
                 needsRender = true
 
             case .end:
-                state.end(visibleRows: visibleRows)
+                state.end(visibleRows: ListRenderer.visibleRows(regionHeight: region.height))
                 needsRender = true
 
             case .backspace:

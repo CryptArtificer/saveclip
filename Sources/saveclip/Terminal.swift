@@ -242,12 +242,15 @@ struct Terminal {
 // MARK: - Region (partial-height screen claim)
 
 final class Region {
-    let height: Int
-    let startRow: Int
+    private(set) var height: Int
+    private(set) var startRow: Int
+    private let requestedHeight: Int
 
     init(height: Int) {
+        self.requestedHeight = height
         let (_, rows) = Terminal.size()
         self.height = min(height, rows)
+        self.startRow = 1
 
         // We need raw mode briefly to query cursor position
         Terminal.enableRawMode()
@@ -261,24 +264,33 @@ final class Region {
 
         // Query where the cursor actually ended up
         if let pos = Terminal.cursorPosition() {
-            // Cursor is at bottom of our region (last newline)
             self.startRow = pos.row - self.height + 1
         } else {
-            // Fallback: assume bottom of terminal
             self.startRow = rows - self.height + 1
         }
 
         Terminal.disableRawMode()
     }
 
+    /// Recalculate after terminal resize
+    func handleResize() {
+        let (_, rows) = Terminal.size()
+        self.height = min(requestedHeight, rows)
+        // Re-query cursor position (we're already in raw mode during the event loop)
+        if let pos = Terminal.cursorPosition() {
+            // Cursor is somewhere in our region — anchor to bottom of region
+            self.startRow = max(1, pos.row - self.height + 1)
+        } else {
+            self.startRow = max(1, rows - self.height + 1)
+        }
+    }
+
     func release() {
         var buf = ANSIBuffer()
-        // Clear our region
         for row in startRow...(startRow + height - 1) {
             buf.moveTo(row: row, col: 1)
             buf.clearLine()
         }
-        // Move cursor to the start of our region
         buf.moveTo(row: startRow, col: 1)
         buf.showCursor()
         buf.flush()
