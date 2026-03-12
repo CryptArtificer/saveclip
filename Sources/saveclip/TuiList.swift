@@ -313,14 +313,107 @@ enum ListRenderer {
             return ""
         }
 
-        // Split preview on literal \n to show multi-line content
+        let maxWidth = width - 4
+
+        // Enhanced preview for non-text types
+        switch item.type {
+        case .image:
+            return imagePreviewLine(item: item, lineIndex: lineIndex, maxWidth: maxWidth)
+        case .filePath:
+            return filePreviewLine(item: item, lineIndex: lineIndex, maxWidth: maxWidth)
+        case .text:
+            break
+        }
+
+        // Text: split on literal \n to show multi-line content
         let lines = item.preview.components(separatedBy: "\\n")
         guard lineIndex < lines.count else { return "" }
         let line = lines[lineIndex]
-        let maxWidth = width - 4
         if line.count > maxWidth {
-            return String(line.prefix(maxWidth - 1)) + "…"
+            return String(line.prefix(maxWidth - 1)) + "\u{2026}"
         }
         return line
+    }
+
+    private static func imagePreviewLine(item: ListItem, lineIndex: Int, maxWidth: Int) -> String {
+        let sizeStr = formatSize(item.entry.totalSize)
+        let dims = imageDimensions(entry: item.entry)
+
+        switch lineIndex {
+        case 0:
+            let dimsStr = dims.map { "\($0.w)\u{00D7}\($0.h)" } ?? "unknown size"
+            return "\u{1F5BC}  Image \u{2022} \(dimsStr) \u{2022} \(sizeStr)"
+        case 1:
+            if let d = dims {
+                // Mini ASCII thumbnail hint
+                let aspect = Double(d.w) / Double(d.h)
+                let barW = min(max(Int(aspect * 6), 2), 20)
+                let border = String(repeating: "\u{2591}", count: barW)
+                return "\u{250C}\(border)\u{2510}  \(item.entry.sourceApp ?? "")"
+            }
+            return item.entry.sourceApp ?? ""
+        case 2:
+            if let d = dims {
+                let aspect = Double(d.w) / Double(d.h)
+                let barW = min(max(Int(aspect * 6), 2), 20)
+                let border = String(repeating: "\u{2591}", count: barW)
+                return "\u{2514}\(border)\u{2518}"
+            }
+            return ""
+        default:
+            return ""
+        }
+    }
+
+    private static func filePreviewLine(item: ListItem, lineIndex: Int, maxWidth: Int) -> String {
+        switch lineIndex {
+        case 0:
+            let sizeStr = formatSize(item.entry.totalSize)
+            return "\u{1F4C1}  File \u{2022} \(sizeStr)"
+        case 1:
+            return item.preview
+        default:
+            return ""
+        }
+    }
+
+    private static func formatSize(_ bytes: Int) -> String {
+        if bytes < 1024 { return "\(bytes) B" }
+        let kb = bytes / 1024
+        if kb < 1024 { return "\(kb) KB" }
+        let mb = Double(bytes) / (1024 * 1024)
+        return String(format: "%.1f MB", mb)
+    }
+
+    private static func imageDimensions(entry: ClipEntry) -> (w: Int, h: Int)? {
+        let path = entry.filePath
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: path, isDirectory: &isDir) else { return nil }
+
+        // Find the image file in bundle
+        let imagePath: String
+        if isDir.boolValue {
+            let manifestPath = (path as NSString).appendingPathComponent("manifest.json")
+            guard let data = fm.contents(atPath: manifestPath),
+                  let manifest = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] else { return nil }
+            let imgItem = manifest.first { ($0["uti"] ?? "").contains("png") || ($0["uti"] ?? "").contains("tiff") }
+            guard let filename = imgItem?["file"] else { return nil }
+            imagePath = (path as NSString).appendingPathComponent(filename)
+        } else {
+            imagePath = path
+        }
+
+        guard let data = fm.contents(atPath: imagePath) else { return nil }
+
+        // PNG: width at offset 16, height at offset 20 (big-endian uint32)
+        if data.count > 24, data[0] == 0x89, data[1] == 0x50 {
+            let w = data.subdata(in: 16..<20).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+            let h = data.subdata(in: 20..<24).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+            return (w: Int(w), h: Int(h))
+        }
+
+        // TIFF: just report from file size
+        return nil
     }
 }
