@@ -222,17 +222,17 @@ enum ListRenderer {
         return buf
     }
 
-    /// 256-color heat based on age (logarithmic bands)
+    /// 256-color heat based on age (logarithmic bands, subdued palette)
     private static func heatColor(for item: ListItem) -> Int {
         let age = -item.entry.timestamp.timeIntervalSinceNow
-        if age < 3600        { return 196 }  // < 1h   bright red (hot)
-        if age < 6 * 3600    { return 208 }  // < 6h   orange
-        if age < 86400       { return 220 }  // < 1d   yellow
-        if age < 3 * 86400   { return 40  }  // < 3d   green
-        if age < 7 * 86400   { return 44  }  // < 1w   cyan
-        if age < 30 * 86400  { return 33  }  // < 1mo  blue
-        if age < 90 * 86400  { return 61  }  // < 3mo  dim purple
-        return 242                            // older  gray (cold)
+        if age < 3600        { return 174 }  // < 1h   muted rose
+        if age < 6 * 3600    { return 180 }  // < 6h   warm tan
+        if age < 86400       { return 186 }  // < 1d   soft wheat
+        if age < 3 * 86400   { return 115 }  // < 3d   sage green
+        if age < 7 * 86400   { return 109 }  // < 1w   muted teal
+        if age < 30 * 86400  { return 103 }  // < 1mo  dusty blue
+        if age < 90 * 86400  { return 139 }  // < 3mo  muted lavender
+        return 245                            // older  dim gray
     }
 
     private static func renderListItem(buf: inout ANSIBuffer, item: ListItem, selected: Bool, width: Int) {
@@ -260,20 +260,21 @@ enum ListRenderer {
 
         preview = String(preview.prefix(maxPreview))
 
+        let color = item.sensitive ? "31" : "38;5;\(heat)"
+
         if selected {
-            // Selected: inverse with heat-colored background
-            buf.write("\u{1B}[1;7;38;5;\(heat)m")
+            buf.write("\u{1B}[1;7;\(color)m")
             buf.write(marker)
-            buf.write("\u{1B}[2;7;38;5;\(heat)m")
+            buf.write("\u{1B}[2;7;\(color)m")
             buf.write(idStr)
             buf.write(" ")
             buf.write(ageStr)
-            buf.write("\u{1B}[1;7;38;5;\(heat)m")
+            buf.write("\u{1B}[1;7;\(color)m")
             buf.write(" ")
             if item.pinned {
                 buf.write("\u{1B}[33;7m")
                 buf.write(pin)
-                buf.write("\u{1B}[1;7;38;5;\(heat)m")
+                buf.write("\u{1B}[1;7;\(color)m")
             } else {
                 buf.write(pin)
             }
@@ -281,12 +282,12 @@ enum ListRenderer {
             if !freq.isEmpty {
                 buf.write("\u{1B}[36;7m")
                 buf.write(freq)
-                buf.write("\u{1B}[1;7;38;5;\(heat)m")
+                buf.write("\u{1B}[1;7;\(color)m")
             }
             if !branch.isEmpty {
                 buf.write("\u{1B}[35;7m")
                 buf.write(branch)
-                buf.write("\u{1B}[1;7;38;5;\(heat)m")
+                buf.write("\u{1B}[1;7;\(color)m")
             }
             buf.write(preview)
             buf.reset()
@@ -316,16 +317,9 @@ enum ListRenderer {
                 buf.write(branch)
                 buf.reset()
             }
-            if item.sensitive {
-                buf.write("\u{1B}[31m")
-                buf.write(preview)
-                buf.reset()
-            } else {
-                // Heat-colored preview text
-                buf.write("\u{1B}[38;5;\(heat)m")
-                buf.write(preview)
-                buf.reset()
-            }
+            buf.write("\u{1B}[\(color)m")
+            buf.write(preview)
+            buf.reset()
         }
     }
 
