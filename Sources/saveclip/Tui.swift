@@ -27,6 +27,9 @@ struct TuiCommand: ParsableCommand {
     @Option(name: .long, help: "Height in terminal rows (0 = 40%)")
     var height: Int = 0
 
+    @Flag(name: [.long, .short, .customShort("\u{0001F631}")], help: "Disable sensitive content redaction")
+    var unsafe: Bool = false
+
     func run() throws {
         guard Terminal.isTTY() else {
             // Fall back to list if not a terminal
@@ -39,7 +42,7 @@ struct TuiCommand: ParsableCommand {
             return
         }
 
-        let runner = try TuiRunner(count: count, initialQuery: query, height: height)
+        let runner = try TuiRunner(count: count, initialQuery: query, height: height, unsafe: unsafe)
         let result = runner.run()
 
         switch result {
@@ -77,7 +80,7 @@ final class TuiRunner {
     private static var shared: TuiRunner?
     private static var resizeFlag = false
 
-    init(count: Int, initialQuery: String?, height: Int) throws {
+    init(count: Int, initialQuery: String?, height: Int, unsafe: Bool = false) throws {
         self.config = Config.load()
         self.storage = try Storage(config: config)
         self.maxCount = count
@@ -86,6 +89,7 @@ final class TuiRunner {
         if let q = initialQuery {
             state.query = q
         }
+        state.unsafeMode = unsafe
 
         // Calculate region height
         let (cols, rows) = Terminal.size()
@@ -225,12 +229,6 @@ final class TuiRunner {
                 state.flash("Reloaded")
                 needsRender = true
 
-            case .ctrl("u"):
-                state.unsafeMode.toggle()
-                state.flash(state.unsafeMode ? "UNSAFE — secrets visible" : "Safe mode")
-                loadEntries()
-                state.filter()
-                needsRender = true
 
             case .up:
                 state.moveCursor(by: -1, visibleRows: visibleRows)
