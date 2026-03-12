@@ -98,6 +98,31 @@ struct Terminal {
         return isatty(STDIN_FILENO) != 0
     }
 
+    /// Query current cursor position via DSR. Requires raw mode.
+    static func cursorPosition() -> (row: Int, col: Int)? {
+        // Send Device Status Report
+        FileHandle.standardError.write("\u{1B}[6n".data(using: .utf8)!)
+
+        // Read response: ESC [ <row> ; <col> R
+        var response: [UInt8] = []
+        var b: UInt8 = 0
+        while read(STDIN_FILENO, &b, 1) == 1 {
+            response.append(b)
+            if b == 82 { break } // 'R'
+            if response.count > 20 { return nil }
+        }
+
+        guard let str = String(bytes: response, encoding: .ascii),
+              str.hasPrefix("\u{1B}["), str.hasSuffix("R") else { return nil }
+
+        let inner = str.dropFirst(2).dropLast(1)
+        let parts = inner.split(separator: ";")
+        guard parts.count == 2,
+              let row = Int(parts[0]),
+              let col = Int(parts[1]) else { return nil }
+        return (row: row, col: col)
+    }
+
     /// Read a key from stdin. Returns nil on timeout / no input.
     static func readKey() -> Key? {
         var c: UInt8 = 0
@@ -219,22 +244,31 @@ struct Terminal {
 final class Region {
     let height: Int
     let startRow: Int
-    private let totalRows: Int
 
     init(height: Int) {
         let (_, rows) = Terminal.size()
-        self.totalRows = rows
         self.height = min(height, rows)
 
-        // Print blank lines to push terminal content up
+        // We need raw mode briefly to query cursor position
+        Terminal.enableRawMode()
+
+        // Print blank lines to push terminal content up and make space
         var buf = ANSIBuffer()
         for _ in 0..<self.height {
             buf.write("\n")
         }
         buf.flush()
 
-        // Our region is the bottom `height` rows
-        self.startRow = rows - self.height + 1
+        // Query where the cursor actually ended up
+        if let pos = Terminal.cursorPosition() {
+            // Cursor is at bottom of our region (last newline)
+            self.startRow = pos.row - self.height + 1
+        } else {
+            // Fallback: assume bottom of terminal
+            self.startRow = rows - self.height + 1
+        }
+
+        Terminal.disableRawMode()
     }
 
     func release() {
