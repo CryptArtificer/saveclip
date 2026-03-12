@@ -140,34 +140,28 @@ enum ListRenderer {
         // ── Header ──
         buf.moveTo(row: row, col: 1)
         buf.clearLine()
+
+        // Left side: mode + count
         let modeLabel = state.viewMode.label
         let countLabel = "\(state.filteredItems.count)/\(state.allItems.count)"
-        buf.style("1;36") // bold cyan
-        buf.write(" \(modeLabel)")
-        buf.reset()
-        buf.style("2") // dim
-        buf.write(" \(countLabel)")
-        buf.reset()
+
+        buf.write(" \u{1B}[38;5;75m\(modeLabel)\u{1B}[0m")  // soft blue mode
+        buf.write(" \u{1B}[38;5;243m\(countLabel)\u{1B}[0m") // gray count
 
         if state.unsafeMode {
-            buf.write(" ")
-            buf.style("1;31") // bold red
-            buf.write(" UNSAFE ")
-            buf.reset()
+            buf.write("  \u{1B}[1;38;5;203m\u{26A0} UNSAFE\u{1B}[0m")
         }
 
-        // Keybind hints (right-aligned)
+        // Right side: hints or flash message
         let hints: String
         if let msg = state.message {
-            hints = " \(msg) "
+            hints = " \u{2022} \(msg) "
         } else {
-            hints = "enter=copy  ^O=stdout  ^D=del  ^P=pin  ^U=unsafe"
+            hints = "\u{23CE}=copy  \u{2303}O=stdout  \u{2303}D=del  \u{2303}P=pin  \u{2303}F=freq  \u{2303}B=branch"
         }
-        let hintsStart = max(1, width - hints.count)
+        let hintsStart = max(1, width - hints.count - 1)
         buf.moveTo(row: row, col: hintsStart)
-        buf.style("2")
-        buf.write(hints)
-        buf.reset()
+        buf.write("\u{1B}[38;5;243m\(hints)\u{1B}[0m")
         row += 1
 
         // ── Preview ──
@@ -178,9 +172,7 @@ enum ListRenderer {
             if let item = selected {
                 let previewText = previewLine(item: item, lineIndex: i, width: width)
                 if !previewText.isEmpty {
-                    buf.style("2") // dim
-                    buf.write("  \(previewText)")
-                    buf.reset()
+                    buf.write("  \u{1B}[38;5;250m\(previewText)\u{1B}[0m")
                 }
             }
             row += 1
@@ -189,33 +181,48 @@ enum ListRenderer {
         // ── Separator ──
         buf.moveTo(row: row, col: 1)
         buf.clearLine()
-        buf.style("2")
-        let sep = String(repeating: "─", count: min(width, 120))
-        buf.write(sep)
+        let sepW = min(width, 120)
+        buf.write("\u{1B}[38;5;238m")
+        buf.write(String(repeating: "\u{2500}", count: sepW))
         buf.reset()
         row += 1
 
         // ── List (bottom-up: selected near prompt) ──
-        for i in 0..<listRows {
-            buf.moveTo(row: row, col: 1)
-            buf.clearLine()
-            // Render in reverse: row 0 (top) shows the furthest item, last row shows selected
-            let visualIndex = listRows - 1 - i
-            let idx = state.scrollOffset + visualIndex
-            if idx < state.filteredItems.count {
-                let item = state.filteredItems[idx]
-                let isSelected = idx == state.cursor
-                renderListItem(buf: &buf, item: item, selected: isSelected, width: width)
+        let isEmpty = state.filteredItems.isEmpty
+        if isEmpty {
+            // Center "no entries" message
+            for i in 0..<listRows {
+                buf.moveTo(row: row, col: 1)
+                buf.clearLine()
+                if i == listRows / 2 {
+                    let msg = state.allItems.isEmpty ? "No clipboard entries" : "No matches"
+                    let pad = max(0, (width - msg.count) / 2)
+                    buf.write("\u{1B}[38;5;243m")
+                    buf.write(String(repeating: " ", count: pad))
+                    buf.write(msg)
+                    buf.reset()
+                }
+                row += 1
             }
-            row += 1
+        } else {
+            for i in 0..<listRows {
+                buf.moveTo(row: row, col: 1)
+                buf.clearLine()
+                let visualIndex = listRows - 1 - i
+                let idx = state.scrollOffset + visualIndex
+                if idx < state.filteredItems.count {
+                    let item = state.filteredItems[idx]
+                    let isSelected = idx == state.cursor
+                    renderListItem(buf: &buf, item: item, selected: isSelected, width: width)
+                }
+                row += 1
+            }
         }
 
         // ── Prompt ──
         buf.moveTo(row: row, col: 1)
         buf.clearLine()
-        buf.style("1") // bold
-        buf.write("search clipboard> ")
-        buf.reset()
+        buf.write(" \u{1B}[38;5;75m\u{25B8}\u{1B}[0m ")  // blue arrow
         buf.write(state.query)
         buf.showCursor()
 
@@ -236,16 +243,23 @@ enum ListRenderer {
     }
 
     private static func renderListItem(buf: inout ANSIBuffer, item: ListItem, selected: Bool, width: Int) {
-        let marker = selected ? "\u{25B8} " : "  "
+        let heat = heatColor(for: item)
         let idStr = String(item.id)
         let ageStr = item.age.padding(toLength: 4, withPad: " ", startingAt: 0)
-        let pin = item.pinned ? "*" : " "
-        let freq = item.copyCount > 1 ? "×\(item.copyCount) " : ""
-        let branch = item.branch != "main" ? "[\(item.branch)] " : ""
-        let heat = heatColor(for: item)
+
+        // Build badges
+        var badges = ""
+        if item.pinned   { badges += "\u{1B}[38;5;222m\u{272A} \u{1B}[0m" }     // gold star
+        if item.copyCount > 1 { badges += "\u{1B}[38;5;116m\u{00D7}\(item.copyCount) \u{1B}[0m" } // soft cyan
+        if item.branch != "main" { badges += "\u{1B}[38;5;176m\(item.branch) \u{1B}[0m" } // soft magenta
+
+        // Approximate visible badge width (without ANSI escapes)
+        let badgeWidth = (item.pinned ? 2 : 0)
+            + (item.copyCount > 1 ? 2 + String(item.copyCount).count : 0)
+            + (item.branch != "main" ? item.branch.count + 1 : 0)
 
         // Calculate available width for preview
-        let metaWidth = marker.count + idStr.count + 1 + ageStr.count + 1 + pin.count + 1 + freq.count + branch.count
+        let metaWidth = 3 + idStr.count + 1 + ageStr.count + 1 + badgeWidth
         let maxPreview = max(10, width - metaWidth - 1)
 
         var preview = item.preview
@@ -254,72 +268,25 @@ enum ListRenderer {
 
         if item.sensitive {
             let visible = String(preview.prefix(8))
-            let masked = String(repeating: "•", count: min(max(0, preview.count - 8), 20))
-            preview = "[sensitive] \(visible)\(masked)"
+            let masked = String(repeating: "\u{2022}", count: min(max(0, preview.count - 8), 20))
+            preview = "\u{1F512} \(visible)\(masked)"
         }
 
         preview = String(preview.prefix(maxPreview))
 
-        let color = item.sensitive ? "31" : "38;5;\(heat)"
+        let textColor = item.sensitive ? "38;5;167" : "38;5;\(heat)"  // muted red for sensitive
 
         if selected {
-            buf.write("\u{1B}[1;7;\(color)m")
-            buf.write(marker)
-            buf.write("\u{1B}[2;7;\(color)m")
-            buf.write(idStr)
-            buf.write(" ")
-            buf.write(ageStr)
-            buf.write("\u{1B}[1;7;\(color)m")
-            buf.write(" ")
-            if item.pinned {
-                buf.write("\u{1B}[33;7m")
-                buf.write(pin)
-                buf.write("\u{1B}[1;7;\(color)m")
-            } else {
-                buf.write(pin)
-            }
-            buf.write(" ")
-            if !freq.isEmpty {
-                buf.write("\u{1B}[36;7m")
-                buf.write(freq)
-                buf.write("\u{1B}[1;7;\(color)m")
-            }
-            if !branch.isEmpty {
-                buf.write("\u{1B}[35;7m")
-                buf.write(branch)
-                buf.write("\u{1B}[1;7;\(color)m")
-            }
-            buf.write(preview)
-            buf.reset()
+            // Selected: subtle highlight bar (no harsh inverse)
+            buf.write(" \u{1B}[38;5;75m\u{25B8}\u{1B}[0m ")  // blue arrow
+            buf.write("\u{1B}[38;5;248m\(idStr) \(ageStr)\u{1B}[0m ")
+            buf.write(badges)
+            buf.write("\u{1B}[1;\(textColor)m\(preview)\u{1B}[0m")
         } else {
-            buf.write(marker)
-            buf.style("2") // dim
-            buf.write(idStr)
-            buf.write(" ")
-            buf.write(ageStr)
-            buf.reset()
-            buf.write(" ")
-            if item.pinned {
-                buf.style("33")
-                buf.write(pin)
-                buf.reset()
-            } else {
-                buf.write(pin)
-            }
-            buf.write(" ")
-            if !freq.isEmpty {
-                buf.style("36")
-                buf.write(freq)
-                buf.reset()
-            }
-            if !branch.isEmpty {
-                buf.style("35")
-                buf.write(branch)
-                buf.reset()
-            }
-            buf.write("\u{1B}[\(color)m")
-            buf.write(preview)
-            buf.reset()
+            buf.write("   ")
+            buf.write("\u{1B}[38;5;242m\(idStr) \(ageStr)\u{1B}[0m ")
+            buf.write(badges)
+            buf.write("\u{1B}[\(textColor)m\(preview)\u{1B}[0m")
         }
     }
 
