@@ -231,19 +231,19 @@ final class TuiRunner {
 
 
             case .up:
-                state.moveCursor(by: -1, visibleRows: visibleRows)
-                needsRender = true
-
-            case .down:
                 state.moveCursor(by: 1, visibleRows: visibleRows)
                 needsRender = true
 
+            case .down:
+                state.moveCursor(by: -1, visibleRows: visibleRows)
+                needsRender = true
+
             case .pageUp:
-                state.pageUp(visibleRows: visibleRows)
+                state.pageDown(visibleRows: visibleRows)
                 needsRender = true
 
             case .pageDown:
-                state.pageDown(visibleRows: visibleRows)
+                state.pageUp(visibleRows: visibleRows)
                 needsRender = true
 
             case .home:

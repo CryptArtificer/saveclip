@@ -195,11 +195,13 @@ enum ListRenderer {
         buf.reset()
         row += 1
 
-        // ── List ──
+        // ── List (bottom-up: selected near prompt) ──
         for i in 0..<listRows {
             buf.moveTo(row: row, col: 1)
             buf.clearLine()
-            let idx = state.scrollOffset + i
+            // Render in reverse: row 0 (top) shows the furthest item, last row shows selected
+            let visualIndex = listRows - 1 - i
+            let idx = state.scrollOffset + visualIndex
             if idx < state.filteredItems.count {
                 let item = state.filteredItems[idx]
                 let isSelected = idx == state.cursor
