@@ -222,6 +222,19 @@ enum ListRenderer {
         return buf
     }
 
+    /// 256-color heat based on age (logarithmic bands)
+    private static func heatColor(for item: ListItem) -> Int {
+        let age = -item.entry.timestamp.timeIntervalSinceNow
+        if age < 3600        { return 196 }  // < 1h   bright red (hot)
+        if age < 6 * 3600    { return 208 }  // < 6h   orange
+        if age < 86400       { return 220 }  // < 1d   yellow
+        if age < 3 * 86400   { return 40  }  // < 3d   green
+        if age < 7 * 86400   { return 44  }  // < 1w   cyan
+        if age < 30 * 86400  { return 33  }  // < 1mo  blue
+        if age < 90 * 86400  { return 61  }  // < 3mo  dim purple
+        return 242                            // older  gray (cold)
+    }
+
     private static func renderListItem(buf: inout ANSIBuffer, item: ListItem, selected: Bool, width: Int) {
         let marker = selected ? "\u{25B8} " : "  "
         let idStr = String(item.id)
@@ -229,6 +242,7 @@ enum ListRenderer {
         let pin = item.pinned ? "*" : " "
         let freq = item.copyCount > 1 ? "×\(item.copyCount) " : ""
         let branch = item.branch != "main" ? "[\(item.branch)] " : ""
+        let heat = heatColor(for: item)
 
         // Calculate available width for preview
         let metaWidth = marker.count + idStr.count + 1 + ageStr.count + 1 + pin.count + 1 + freq.count + branch.count
@@ -236,12 +250,7 @@ enum ListRenderer {
 
         var preview = item.preview
         if preview.hasSuffix("\\n") { preview = String(preview.dropLast(2)) }
-        // Replace literal \n with spaces for single-line display
         preview = preview.replacingOccurrences(of: "\\n", with: " ")
-
-        if selected {
-            buf.style("1;7") // bold + inverse
-        }
 
         if item.sensitive {
             let visible = String(preview.prefix(8))
@@ -252,30 +261,32 @@ enum ListRenderer {
         preview = String(preview.prefix(maxPreview))
 
         if selected {
+            // Selected: inverse with heat-colored background
+            buf.write("\u{1B}[1;7;38;5;\(heat)m")
             buf.write(marker)
-            buf.style("2;7") // dim + inverse
+            buf.write("\u{1B}[2;7;38;5;\(heat)m")
             buf.write(idStr)
             buf.write(" ")
             buf.write(ageStr)
-            buf.style("1;7") // bold + inverse
+            buf.write("\u{1B}[1;7;38;5;\(heat)m")
             buf.write(" ")
             if item.pinned {
-                buf.style("33;7") // yellow
+                buf.write("\u{1B}[33;7m")
                 buf.write(pin)
-                buf.style("1;7")
+                buf.write("\u{1B}[1;7;38;5;\(heat)m")
             } else {
                 buf.write(pin)
             }
             buf.write(" ")
             if !freq.isEmpty {
-                buf.style("36;7") // cyan
+                buf.write("\u{1B}[36;7m")
                 buf.write(freq)
-                buf.style("1;7")
+                buf.write("\u{1B}[1;7;38;5;\(heat)m")
             }
             if !branch.isEmpty {
-                buf.style("35;7") // magenta
+                buf.write("\u{1B}[35;7m")
                 buf.write(branch)
-                buf.style("1;7")
+                buf.write("\u{1B}[1;7;38;5;\(heat)m")
             }
             buf.write(preview)
             buf.reset()
@@ -288,7 +299,7 @@ enum ListRenderer {
             buf.reset()
             buf.write(" ")
             if item.pinned {
-                buf.style("33") // yellow
+                buf.style("33")
                 buf.write(pin)
                 buf.reset()
             } else {
@@ -296,21 +307,22 @@ enum ListRenderer {
             }
             buf.write(" ")
             if !freq.isEmpty {
-                buf.style("36") // cyan
+                buf.style("36")
                 buf.write(freq)
                 buf.reset()
             }
             if !branch.isEmpty {
-                buf.style("35") // magenta
+                buf.style("35")
                 buf.write(branch)
                 buf.reset()
             }
             if item.sensitive {
-                buf.style("31") // red
+                buf.write("\u{1B}[31m")
                 buf.write(preview)
                 buf.reset()
             } else {
-                buf.style("1") // bold
+                // Heat-colored preview text
+                buf.write("\u{1B}[38;5;\(heat)m")
                 buf.write(preview)
                 buf.reset()
             }
