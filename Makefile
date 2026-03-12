@@ -33,6 +33,7 @@ install: release
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/saveclip
+	rm -f $(ZSH_DST)
 
 link:
 	@echo "Linking zsh integration to $(ZSH_DST)"

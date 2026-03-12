@@ -45,6 +45,27 @@ Then source from your `.zshrc`:
 source ~/.zsh/saveclip.zsh
 ```
 
+## TUI picker
+
+```
+ ALL 42/200                        enter=copy  ^O=stdout  ^D=del  ^P=pin  ^F=freq  ^B=branch
+  just a regular note
+  second line of preview if present
+────────────────────────────────────────────────────────────
+▸ 38  27m   just a regular note
+  37  28m   [sensitive] AKIAIOSF••••••••••••
+  36  28m * normal safe text
+  35  28m   ssh-ed25519 AAAAC3Nza...
+  34  30m   safe normal text
+  33  31m   [work] Slack message content here
+  32  35m   SELECT * FROM users WHERE id = 42
+  31  40m   const handler = async (req, res) => {...}
+search clipboard> _
+```
+
+Type to filter, arrows to navigate, enter to copy back to clipboard.
+All actions happen inline — no subprocesses, no flicker.
+
 ## Usage
 
 ```sh
