@@ -244,32 +244,20 @@ enum ListRenderer {
 
     private static func renderListItem(buf: inout ANSIBuffer, item: ListItem, selected: Bool, width: Int) {
         let heat = heatColor(for: item)
-        let idStr = String(item.id)
 
         // Right-align age in 3 chars
         let age = String(item.age.prefix(3))
         let agePad = String(repeating: " ", count: max(0, 3 - age.count))
         let ageStr = "\(agePad)\(age)"
 
-        // Build badges
-        var badges = ""
-        var badgeWidth = 0
-        if item.pinned {
-            badges += "\u{1B}[38;5;222m\u{272A}\u{1B}[0m "
-            badgeWidth += 2
-        }
-        if item.copyCount > 1 {
-            let c = "\u{00D7}\(item.copyCount)"
-            badges += "\u{1B}[38;5;116m\(c)\u{1B}[0m "
-            badgeWidth += c.count + 1
-        }
-        if item.branch != "main" {
-            badges += "\u{1B}[38;5;176m\(item.branch)\u{1B}[0m "
-            badgeWidth += item.branch.count + 1
-        }
+        // Build plain-text badges
+        var badgeTxt = ""
+        if item.pinned { badgeTxt += "\u{272A} " }
+        if item.copyCount > 1 { badgeTxt += "\u{00D7}\(item.copyCount) " }
+        if item.branch != "main" { badgeTxt += "\(item.branch) " }
 
-        // marker(2) + id + space(1) + age(3) + space(1) + badges + preview
-        let metaWidth = 2 + idStr.count + 1 + 3 + 1 + badgeWidth
+        // marker(2) + age(3) + space(1) + badges + preview
+        let metaWidth = 2 + 3 + 1 + badgeTxt.count
         let maxPreview = max(10, width - metaWidth - 1)
 
         var preview = item.preview
@@ -284,20 +272,20 @@ enum ListRenderer {
 
         preview = String(preview.prefix(maxPreview))
 
-        let textColor = item.sensitive ? "38;5;167" : "38;5;\(heat)"
-
         if selected {
-            // Inverted bar in warm white
-            buf.write("\u{1B}[7;38;5;230m \u{25B8}\u{1B}[0m")
-            buf.write("\u{1B}[7;38;5;248m\(idStr)\u{1B}[0m")
-            buf.write("\u{1B}[7;38;5;\(heat)m \(ageStr)\u{1B}[0m")
-            buf.write("\u{1B}[7m \(badges)\u{1B}[0m")
-            buf.write("\u{1B}[7;38;5;230m\(preview)\u{1B}[0m")
+            // One unbroken inverted bar — warm white foreground
+            let line = " \u{25B8} \(ageStr) \(badgeTxt)\(preview)"
+            // Pad to full width for unbroken bar
+            let padded = line.count < width ? line + String(repeating: " ", count: width - line.count) : line
+            buf.write("\u{1B}[7;38;5;230m\(padded)\u{1B}[0m")
         } else {
-            buf.write("  ")
-            buf.write("\u{1B}[38;5;242m\(idStr)\u{1B}[0m")
-            buf.write(" \u{1B}[38;5;\(heat)m\(ageStr)\u{1B}[0m")
-            buf.write(" \(badges)")
+            buf.write("   ")
+            buf.write("\u{1B}[38;5;\(heat)m\(ageStr)\u{1B}[0m ")
+            // Colored badges
+            if item.pinned { buf.write("\u{1B}[38;5;222m\u{272A}\u{1B}[0m ") }
+            if item.copyCount > 1 { buf.write("\u{1B}[38;5;116m\u{00D7}\(item.copyCount)\u{1B}[0m ") }
+            if item.branch != "main" { buf.write("\u{1B}[38;5;176m\(item.branch)\u{1B}[0m ") }
+            let textColor = item.sensitive ? "38;5;167" : "38;5;\(heat)"
             buf.write("\u{1B}[\(textColor)m\(preview)\u{1B}[0m")
         }
     }
@@ -320,27 +308,31 @@ enum ListRenderer {
             break
         }
 
-        // Text: split on literal \n to show multi-line content
-        let lines = item.preview.components(separatedBy: "\\n")
-        guard lineIndex < lines.count else { return "" }
-        let line = lines[lineIndex]
-        if line.count > maxWidth {
-            return String(line.prefix(maxWidth - 1)) + "\u{2026}"
-        }
-        return line
+        return textPreviewLine(item: item, lineIndex: lineIndex, maxWidth: maxWidth)
     }
 
     private static func imagePreviewLine(item: ListItem, lineIndex: Int, maxWidth: Int) -> String {
         let sizeStr = formatSize(item.entry.totalSize)
-        let dims = imageDimensions(entry: item.entry)
+        let info = imageInfo(entry: item.entry)
 
         switch lineIndex {
         case 0:
-            let dimsStr = dims.map { "\($0.w) \u{00D7} \($0.h)" } ?? ""
-            if dimsStr.isEmpty {
-                return "Image \u{2022} \(sizeStr)"
+            var parts = ["\u{1F5BC}  Image"]
+            if let d = info.dimensions { parts.append("\(d.w) \u{00D7} \(d.h)") }
+            parts.append(sizeStr)
+            if let fmt = info.format { parts.append(fmt.uppercased()) }
+            return parts.joined(separator: " \u{2022} ")
+        case 1:
+            var parts: [String] = []
+            if let app = item.entry.sourceApp { parts.append("from \(app)") }
+            if let reps = info.representations, reps > 1 { parts.append("\(reps) representations") }
+            return parts.isEmpty ? "" : parts.joined(separator: " \u{2022} ")
+        case 2:
+            // Show stored UTI types
+            if let utis = info.utis, !utis.isEmpty {
+                return utis.joined(separator: ", ")
             }
-            return "Image \u{2022} \(dimsStr) \u{2022} \(sizeStr)"
+            return ""
         default:
             return ""
         }
@@ -353,9 +345,22 @@ enum ListRenderer {
             return "\u{1F4C1}  File \u{2022} \(sizeStr)"
         case 1:
             return item.preview
+        case 2:
+            if let app = item.entry.sourceApp { return "from \(app)" }
+            return ""
         default:
             return ""
         }
+    }
+
+    private static func textPreviewLine(item: ListItem, lineIndex: Int, maxWidth: Int) -> String {
+        let lines = item.preview.components(separatedBy: "\\n")
+        guard lineIndex < lines.count else { return "" }
+        let line = lines[lineIndex]
+        if line.count > maxWidth {
+            return String(line.prefix(maxWidth - 1)) + "\u{2026}"
+        }
+        return line
     }
 
     private static func formatSize(_ bytes: Int) -> String {
@@ -366,35 +371,72 @@ enum ListRenderer {
         return String(format: "%.1f MB", mb)
     }
 
-    private static func imageDimensions(entry: ClipEntry) -> (w: Int, h: Int)? {
+    struct ImageInfoResult {
+        var dimensions: (w: Int, h: Int)?
+        var format: String?
+        var representations: Int?
+        var utis: [String]?
+    }
+
+    private static func imageInfo(entry: ClipEntry) -> ImageInfoResult {
+        var result = ImageInfoResult()
         let path = entry.filePath
         let fm = FileManager.default
         var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: path, isDirectory: &isDir) else { return nil }
+        guard fm.fileExists(atPath: path, isDirectory: &isDir) else { return result }
 
-        // Find the image file in bundle
-        let imagePath: String
+        var imagePath: String = path
+
         if isDir.boolValue {
             let manifestPath = (path as NSString).appendingPathComponent("manifest.json")
-            guard let data = fm.contents(atPath: manifestPath),
-                  let manifest = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] else { return nil }
-            let imgItem = manifest.first { ($0["uti"] ?? "").contains("png") || ($0["uti"] ?? "").contains("tiff") }
-            guard let filename = imgItem?["file"] else { return nil }
-            imagePath = (path as NSString).appendingPathComponent(filename)
-        } else {
-            imagePath = path
+            if let data = fm.contents(atPath: manifestPath),
+               let manifest = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] {
+                result.representations = manifest.count
+                result.utis = manifest.compactMap { $0["uti"] }.map { shortUTI($0) }
+                let imgItem = manifest.first { ($0["uti"] ?? "").contains("png") }
+                    ?? manifest.first { ($0["uti"] ?? "").contains("tiff") }
+                if let filename = imgItem?["file"] {
+                    imagePath = (path as NSString).appendingPathComponent(filename)
+                }
+            }
         }
 
-        guard let data = fm.contents(atPath: imagePath) else { return nil }
+        guard let data = fm.contents(atPath: imagePath), data.count > 24 else { return result }
 
-        // PNG: width at offset 16, height at offset 20 (big-endian uint32)
-        if data.count > 24, data[0] == 0x89, data[1] == 0x50 {
+        // PNG
+        if data[0] == 0x89 && data[1] == 0x50 {
+            result.format = "png"
             let w = data.subdata(in: 16..<20).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
             let h = data.subdata(in: 20..<24).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
-            return (w: Int(w), h: Int(h))
+            result.dimensions = (w: Int(w), h: Int(h))
+        }
+        // TIFF (little-endian)
+        else if data[0] == 0x49 && data[1] == 0x49 {
+            result.format = "tiff"
+        }
+        // TIFF (big-endian)
+        else if data[0] == 0x4D && data[1] == 0x4D {
+            result.format = "tiff"
         }
 
-        // TIFF: just report from file size
-        return nil
+        return result
+    }
+
+    private static func shortUTI(_ uti: String) -> String {
+        // Shorten common UTIs for display
+        switch uti {
+        case "public.utf8-plain-text": return "text"
+        case "public.html": return "html"
+        case "public.rtf": return "rtf"
+        case "public.png": return "png"
+        case "public.tiff": return "tiff"
+        case "public.file-url": return "file-url"
+        case "com.apple.webarchive": return "webarchive"
+        case "org.chromium.source-url": return "source-url"
+        default:
+            if uti.hasPrefix("public.") { return String(uti.dropFirst(7)) }
+            if uti.hasPrefix("com.apple.") { return String(uti.dropFirst(10)) }
+            return uti
+        }
     }
 }

@@ -272,17 +272,17 @@ final class Region {
         Terminal.disableRawMode()
     }
 
-    /// Recalculate after terminal resize
+    /// Recalculate after terminal resize.
+    /// Moves the cursor to the bottom of the new region and re-anchors.
     func handleResize() {
         let (_, rows) = Terminal.size()
         self.height = min(requestedHeight, rows)
-        // Re-query cursor position (we're already in raw mode during the event loop)
-        if let pos = Terminal.cursorPosition() {
-            // Cursor is somewhere in our region — anchor to bottom of region
-            self.startRow = max(1, pos.row - self.height + 1)
-        } else {
-            self.startRow = max(1, rows - self.height + 1)
-        }
+        // Keep region anchored at the bottom of the visible terminal
+        self.startRow = max(1, rows - self.height + 1)
+        // Move cursor to bottom of region so next render is clean
+        var buf = ANSIBuffer()
+        buf.moveTo(row: startRow + height - 1, col: 1)
+        buf.flush()
     }
 
     func release() {
