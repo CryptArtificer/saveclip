@@ -60,9 +60,12 @@ func relativeTime(from date: Date, to now: Date, calendar: Calendar) -> String {
     let hours = minutes / 60
     if hours < 24 { return "\(hours)h" }
     let days = hours / 24
-    if days < 30 { return "\(days)d" }
-    let months = days / 30
-    return "\(months)mo"
+    if days < 7 { return "\(days)d" }
+    let weeks = days / 7
+    if weeks < 52 { return "\(weeks)w" }
+    let years = days / 365
+    if years < 100 { return "\(years)y" }
+    return "old"
 }
 
 @main

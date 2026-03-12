@@ -245,21 +245,31 @@ enum ListRenderer {
     private static func renderListItem(buf: inout ANSIBuffer, item: ListItem, selected: Bool, width: Int) {
         let heat = heatColor(for: item)
         let idStr = String(item.id)
-        let ageStr = item.age.padding(toLength: 4, withPad: " ", startingAt: 0)
+
+        // Right-align age in 3 chars
+        let age = String(item.age.prefix(3))
+        let agePad = String(repeating: " ", count: max(0, 3 - age.count))
+        let ageStr = "\(agePad)\(age)"
 
         // Build badges
         var badges = ""
-        if item.pinned   { badges += "\u{1B}[38;5;222m\u{272A} \u{1B}[0m" }     // gold star
-        if item.copyCount > 1 { badges += "\u{1B}[38;5;116m\u{00D7}\(item.copyCount) \u{1B}[0m" } // soft cyan
-        if item.branch != "main" { badges += "\u{1B}[38;5;176m\(item.branch) \u{1B}[0m" } // soft magenta
+        var badgeWidth = 0
+        if item.pinned {
+            badges += "\u{1B}[38;5;222m\u{272A}\u{1B}[0m "
+            badgeWidth += 2
+        }
+        if item.copyCount > 1 {
+            let c = "\u{00D7}\(item.copyCount)"
+            badges += "\u{1B}[38;5;116m\(c)\u{1B}[0m "
+            badgeWidth += c.count + 1
+        }
+        if item.branch != "main" {
+            badges += "\u{1B}[38;5;176m\(item.branch)\u{1B}[0m "
+            badgeWidth += item.branch.count + 1
+        }
 
-        // Approximate visible badge width (without ANSI escapes)
-        let badgeWidth = (item.pinned ? 2 : 0)
-            + (item.copyCount > 1 ? 2 + String(item.copyCount).count : 0)
-            + (item.branch != "main" ? item.branch.count + 1 : 0)
-
-        // Calculate available width for preview
-        let metaWidth = 3 + idStr.count + 1 + ageStr.count + 1 + badgeWidth
+        // marker(2) + id + space(1) + age(3) + space(1) + badges + preview
+        let metaWidth = 2 + idStr.count + 1 + 3 + 1 + badgeWidth
         let maxPreview = max(10, width - metaWidth - 1)
 
         var preview = item.preview
@@ -274,18 +284,19 @@ enum ListRenderer {
 
         preview = String(preview.prefix(maxPreview))
 
-        let textColor = item.sensitive ? "38;5;167" : "38;5;\(heat)"  // muted red for sensitive
+        let textColor = item.sensitive ? "38;5;167" : "38;5;\(heat)"
 
         if selected {
-            // Selected: subtle highlight bar (no harsh inverse)
-            buf.write(" \u{1B}[38;5;75m\u{25B8}\u{1B}[0m ")  // blue arrow
-            buf.write("\u{1B}[38;5;248m\(idStr) \(ageStr)\u{1B}[0m ")
-            buf.write(badges)
-            buf.write("\u{1B}[1;\(textColor)m\(preview)\u{1B}[0m")
+            buf.write(" \u{1B}[38;5;229m\u{25B8}\u{1B}[0m")            // light yellow arrow
+            buf.write("\u{1B}[38;5;229m\(idStr)\u{1B}[0m")             // light yellow id
+            buf.write(" \u{1B}[38;5;\(heat)m\(ageStr)\u{1B}[0m")
+            buf.write(" \(badges)")
+            buf.write("\u{1B}[38;5;230m\(preview)\u{1B}[0m")           // warm white preview
         } else {
-            buf.write("   ")
-            buf.write("\u{1B}[38;5;242m\(idStr) \(ageStr)\u{1B}[0m ")
-            buf.write(badges)
+            buf.write("  ")
+            buf.write("\u{1B}[38;5;242m\(idStr)\u{1B}[0m")
+            buf.write(" \u{1B}[38;5;\(heat)m\(ageStr)\u{1B}[0m")
+            buf.write(" \(badges)")
             buf.write("\u{1B}[\(textColor)m\(preview)\u{1B}[0m")
         }
     }
