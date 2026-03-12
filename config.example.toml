@@ -1,0 +1,35 @@
+# saveclip configuration
+# Copy this file to ~/.saveclip/config.toml to customize
+
+# Where to store clipboard entries
+# storage_dir = "~/.saveclip/clips"
+
+# How often to check the clipboard (in seconds)
+# poll_interval = 0.5
+
+# Maximum number of entries to keep (oldest are removed first)
+# max_entries = 1000
+
+# Maximum size of a single entry in bytes (10MB default)
+# max_entry_size = 10485760
+
+# Apps to ignore (clipboard copies from these apps won't be saved)
+# excluded_apps = ["1Password", "Keychain Access"]
+
+# Compress clip files older than this many days (saves disk space)
+# Set to 0 to disable compression
+# compress_after_days = 7
+
+# Auto-delete unpinned clips older than this many days
+# Set to 0 to keep forever (still subject to max_entries)
+# ttl_days = 90
+
+# Maximum total storage in MB. When exceeded, old large entries are evicted first.
+# Uses a smart score (size * age) so small text clips are effectively never evicted.
+# max_storage_mb = 300
+
+# Branch heuristics: auto-route clips from specific apps to branches
+# Format: branch.<AppName> = "<branch_name>"
+# branch.Slack = "comms"
+# branch.Figma = "design"
+# branch.Xcode = "dev"
