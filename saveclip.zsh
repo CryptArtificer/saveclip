@@ -76,10 +76,19 @@ clb() {
     return 1
   fi
 
-  if [[ -n "$*" ]]; then
-    "$bin" tui --query "$*"
+  local -a flags=() query_parts=()
+  for arg in "$@"; do
+    if [[ "$arg" == -* ]]; then
+      flags+=("$arg")
+    else
+      query_parts+=("$arg")
+    fi
+  done
+
+  if [[ ${#query_parts[@]} -gt 0 ]]; then
+    "$bin" tui "${flags[@]}" --query "${query_parts[*]}"
   else
-    "$bin" tui
+    "$bin" tui "${flags[@]}"
   fi
 }
 
