@@ -73,7 +73,7 @@ struct SaveClip: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "saveclip",
         abstract: "Clipboard history daemon for macOS",
-        subcommands: [Start.self, Stop.self, Status.self, List.self, Get.self, Search.self, Paste.self, Pop.self, Frequent.self, Pin.self, Unpin.self, Delete.self, DeleteMatching.self, Scrub.self, Clear.self, BranchCmd.self, BranchesCmd.self, MoveCmd.self, ConfigCmd.self, DaemonCmd.self, TuiCommand.self]
+        subcommands: [Start.self, Stop.self, Status.self, List.self, Get.self, Search.self, Paste.self, Pop.self, Frequent.self, Pin.self, Unpin.self, Delete.self, DeleteMatching.self, Scrub.self, Clear.self, BranchCmd.self, BranchesCmd.self, MoveCmd.self, ConfigCmd.self, DaemonCmd.self, TuiCommand.self, Add.self]
     )
 }
 
@@ -315,27 +315,99 @@ struct Search: ParsableCommand {
 struct Paste: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "paste",
-        abstract: "Print the most recent clipboard entry to stdout"
+        abstract: "Print clipboard entries to stdout"
     )
+
+    @Option(name: .shortAndLong, help: "Number of entries to print")
+    var count: Int = 1
+
+    @Flag(name: [.customShort("0"), .customLong("null")], help: "Null byte separator between entries")
+    var zero = false
 
     func run() throws {
         let config = Config.load()
         let storage = try Storage(config: config)
-        let entries = storage.list(limit: 1)
-        guard let entry = entries.first else {
-            print("No clipboard entries.")
+        let entries = storage.list(limit: count)
+
+        if entries.isEmpty {
+            FileHandle.standardError.write("No clipboard entries.\n".data(using: .utf8)!)
             throw ExitCode.failure
         }
-        guard entry.type == .text || entry.type == .filePath else {
-            FileHandle.standardError.write("Entry \(entry.id) is \(entry.type.rawValue), not text.\n".data(using: .utf8)!)
+
+        let out = FileHandle.standardOutput
+        var first = true
+        for entry in entries {
+            guard entry.type == .text || entry.type == .filePath else {
+                if count == 1 {
+                    FileHandle.standardError.write("Entry \(entry.id) is \(entry.type.rawValue), not text.\n".data(using: .utf8)!)
+                    throw ExitCode.failure
+                }
+                continue
+            }
+            guard let data = storage.readClipData(entry: entry),
+                  let str = String(data: data, encoding: .utf8) else {
+                if count == 1 {
+                    FileHandle.standardError.write("Clip file missing.\n".data(using: .utf8)!)
+                    throw ExitCode.failure
+                }
+                continue
+            }
+
+            if !first {
+                let sep = zero ? "\0" : "\n\n"
+                out.write(sep.data(using: .utf8)!)
+            }
+            out.write(str.data(using: .utf8)!)
+            first = false
+        }
+    }
+}
+
+struct Add: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "add",
+        abstract: "Add text from stdin to clipboard history"
+    )
+
+    @Flag(name: .shortAndLong, help: "Slurp all input as one entry (ignore null delimiters)")
+    var slurp = false
+
+    func run() throws {
+        let inputData = FileHandle.standardInput.readDataToEndOfFile()
+        guard !inputData.isEmpty,
+              let input = String(data: inputData, encoding: .utf8) else {
+            FileHandle.standardError.write("No input on stdin.\n".data(using: .utf8)!)
             throw ExitCode.failure
         }
-        guard let data = storage.readClipData(entry: entry),
-              let str = String(data: data, encoding: .utf8) else {
-            FileHandle.standardError.write("Clip file missing.\n".data(using: .utf8)!)
-            throw ExitCode.failure
+
+        let config = Config.load()
+        let storage = try Storage(config: config)
+        let branch = BranchState.current()
+
+        if slurp {
+            var text = input
+            if text.hasSuffix("\n") { text = String(text.dropLast()) }
+            try saveText(text, storage: storage, config: config, branch: branch)
+        } else {
+            let parts = input.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
+            for var part in parts {
+                if part.hasSuffix("\n") { part = String(part.dropLast()) }
+                try saveText(part, storage: storage, config: config, branch: branch)
+            }
         }
-        print(str, terminator: "")
+
+        // Tee: pass through raw input
+        FileHandle.standardOutput.write(inputData)
+    }
+
+    private func saveText(_ text: String, storage: Storage, config: Config, branch: String) throws {
+        guard !text.isEmpty else { return }
+        let data = text.data(using: .utf8)!
+        let rep = ClipRepresentation(uti: "public.utf8-plain-text", data: data, filename: "text.txt")
+        let preview = String(text.prefix(200)).replacingOccurrences(of: "\n", with: "\\n")
+        let content = ClipContent(representations: [rep], preview: preview, primaryType: .text, totalSize: data.count)
+        let sensitive = config.isSensitive(preview)
+        try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: sensitive)
     }
 }
 

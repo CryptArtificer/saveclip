@@ -97,6 +97,14 @@ struct Terminal {
         FileHandle.standardError.write("\u{1B}[?1006l\u{1B}[?1002l".data(using: .utf8)!)
     }
 
+    static func enterAlternateScreen() {
+        FileHandle.standardError.write("\u{1B}[?1049h".data(using: .utf8)!)
+    }
+
+    static func leaveAlternateScreen() {
+        FileHandle.standardError.write("\u{1B}[?1049l".data(using: .utf8)!)
+    }
+
     static func size() -> (cols: Int, rows: Int) {
         var ws = winsize()
         // Try stdin first — most reliable when stdout is piped via $()
@@ -266,12 +274,19 @@ struct Terminal {
                 var next: UInt8 = 0
                 _ = read(STDIN_FILENO, &next, 1)
                 if next == 126 { return .home } // ESC [ 1 ~
-                // Skip modifier sequences like ESC [ 1 ; 5 A
                 if next == 59 {
                     var mod: UInt8 = 0
                     _ = read(STDIN_FILENO, &mod, 1)
                     var final: UInt8 = 0
                     _ = read(STDIN_FILENO, &final, 1)
+                    // Cmd (modifier 9) + Up/Down = Home/End
+                    if mod == 57 {
+                        switch final {
+                        case 65: return .home
+                        case 66: return .end
+                        default: break
+                        }
+                    }
                     switch final {
                     case 65: return .up
                     case 66: return .down
@@ -363,93 +378,5 @@ struct Terminal {
             return .char(ch)
         }
         return .char("?")
-    }
-}
-
-// MARK: - Region (partial-height screen claim)
-
-final class Region {
-    private(set) var height: Int
-    private(set) var startRow: Int
-    private var requestedHeight: Int
-
-    init(height: Int) {
-        self.requestedHeight = height
-        let (_, rows) = Terminal.size()
-        self.height = min(height, rows)
-        self.startRow = 1
-
-        // We need raw mode briefly to query cursor position
-        Terminal.enableRawMode()
-
-        // Print blank lines to push terminal content up and make space
-        var buf = ANSIBuffer()
-        for _ in 0..<self.height {
-            buf.write("\n")
-        }
-        buf.flush()
-
-        // Query where the cursor actually ended up
-        if let pos = Terminal.cursorPosition() {
-            self.startRow = pos.row - self.height + 1
-        } else {
-            self.startRow = rows - self.height + 1
-        }
-
-        Terminal.disableRawMode()
-    }
-
-    /// Recalculate after terminal resize.
-    func handleResize() {
-        let (cols, rows) = Terminal.size()
-        let oldHeight = self.height
-        let oldStart = self.startRow
-        self.height = min(requestedHeight, rows)
-
-        Region.rlog("handleResize: old=\(oldStart)+\(oldHeight) newTermSize=\(cols)x\(rows) newH=\(self.height) reqH=\(requestedHeight)")
-
-        // Clear the old region (might be at wrong position after reflow)
-        var buf = ANSIBuffer()
-        for row in oldStart...min(oldStart + oldHeight - 1, rows + 50) {
-            buf.moveTo(row: row, col: 1)
-            buf.clearLine()
-        }
-
-        // Move to bottom of terminal and print newlines to claim space
-        buf.moveTo(row: rows, col: 1)
-        for _ in 0..<self.height {
-            buf.write("\n")
-        }
-        buf.flush()
-
-        // Re-query cursor position to find where we ended up
-        if let pos = Terminal.cursorPosition() {
-            self.startRow = max(1, pos.row - self.height + 1)
-            Region.rlog("  DSR got row=\(pos.row) col=\(pos.col) -> startRow=\(self.startRow)")
-        } else {
-            self.startRow = max(1, rows - self.height + 1)
-            Region.rlog("  DSR FAILED, fallback startRow=\(self.startRow)")
-        }
-    }
-
-    private static func rlog(_ msg: String) {
-        let ts = String(format: "%.3f", Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 10000))
-        if let fh = FileHandle(forWritingAtPath: "/tmp/saveclip-resize.log") {
-            fh.seekToEndOfFile()
-            fh.write("[\(ts)] \(msg)\n".data(using: .utf8)!)
-            fh.closeFile()
-        }
-    }
-
-
-    func release() {
-        var buf = ANSIBuffer()
-        for row in startRow...(startRow + height - 1) {
-            buf.moveTo(row: row, col: 1)
-            buf.clearLine()
-        }
-        buf.moveTo(row: startRow, col: 1)
-        buf.showCursor()
-        buf.flush()
     }
 }

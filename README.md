@@ -19,7 +19,8 @@ and restore entries instantly.
 ## Features
 
 - **Full fidelity** — stores every pasteboard representation (rich text, HTML, images, source URLs), not just plain text
-- **Built-in TUI** — native terminal picker with FTS5 search, preview panel, mouse support, and inline actions (no fzf dependency)
+- **Built-in TUI** — fullscreen terminal picker with FTS5 search (+ typo fallback), syntax-highlighted preview (via `bat`), image preview (half-block 24-bit color), mouse support, and inline actions
+- **Pipe mode** — `clip` works like `pbcopy`/`pbpaste`: `echo foo | clip` saves, `clip` outputs, `... | clip | ...` tees through
 - **Auto-refresh** — TUI updates live as new clipboard entries arrive
 - **Mouse support** — click to select, double-click to copy, scroll wheel, draggable preview/list divider
 - **Adaptive colors** — detects terminal fg/bg colors via OSC 10/11, age-based grey gradient that works in dark and light modes, reacts to theme changes live
@@ -52,56 +53,77 @@ source ~/.zsh/saveclip.zsh
 ## TUI picker
 
 ```
- ALL 42/200                        enter=copy  ^O=stdout  ^D=del  ^P=pin  ^F=freq  ^B=branch
-  just a regular note
-  second line of preview if present
-────────────────────────────────────────────────────────────
-> 38  27m  just a regular note
-  37  28m  [sensitive] AKIAIOSF********************
+ ALL 42/200                enter=copy  ^O=out  ^D=del  ^P=pin  ^T=top  ^F=freq  ^B=branch
+  {                                              ┐
+    "name": "saveclip",                          │ syntax-highlighted
+    "version": "1.0"                             │ preview (bat)
+  }                                              ┘
+──────────────────────────────────────────────────
+  38   5m  just a regular note
+  37  28m  [sensitive] AKIAIOSF**************
   36  28m  [pin] normal safe text
-  35  28m  ssh-ed25519 AAAAC3Nza...
-  34  30m  safe normal text
-  33  31m  [work] Slack message content here
-  32  35m  SELECT * FROM users WHERE id = 42
-  31  40m  const handler = async (req, res) => {...}
+> 35  30m  {"name": "saveclip", "version": "1.0"}
+  34  31m  [work] Slack message content here
+  33  35m  SELECT * FROM users WHERE id = 42
  > _
 ```
 
-Type to search (FTS5 prefix matching), arrows or mouse to navigate, enter or
-double-click to copy back to clipboard. Selected text (<1KB) is emitted to
-stdout for `print -z` shell integration. The preview/list divider is draggable
-and its size persists across sessions.
+Fullscreen TUI (alternate screen). Type to search — FTS5 prefix matching with
+Levenshtein fallback for typos, debounced 200ms. Arrows, mouse, or Cmd+Up/Down
+to navigate. Enter or double-click to copy back to clipboard. Selected text
+(<1KB) is emitted to stdout for `print -z` shell integration. The preview/list
+divider is draggable and its size persists across sessions.
+
+If `bat` is installed, text preview is syntax-highlighted (ansi theme, language
+auto-detected). Images render inline as half-block characters with 24-bit
+color. URLs are highlighted in the preview.
 
 ## Usage
 
 ```sh
-# Start the daemon
-clb start
+# Daemon
+clip start              # start the clipboard daemon
+clip stop               # stop it
+clip status             # check if running
+clip config             # show current configuration
 
-# Open interactive picker (TUI)
-clb
+# Interactive TUI picker
+clb                     # browse & pick from history
+clb <query>             # open with pre-filtered search
+clip search <query>     # alias for clb <query>
 
-# Search
-clb search <query>
+# Pipe mode (like pbcopy/pbpaste)
+clip                    # print last clip to stdout
+clip --pop              # print last clip and remove it
+clip -5                 # last 5 entries (double-newline separated)
+clip -5 -0              # last 5 entries (null-separated)
+echo foo | clip         # save stdin, pass through to stdout
+cat file | clip         # save entire file as one entry
+... | clip | jq         # tee: saves and passes through
+... | clip -s           # slurp all stdin as one entry
+printf 'a\0b\0c' | clip  # null-delimited → 3 separate entries
 
-# List recent entries
-clb list
-clb list --all
-
-# Copy entry back to clipboard
-clb <id>
-clb get <id> -o    # print to stdout instead
+# List / get entries
+clip list               # list entries (current branch)
+clip list --all         # list entries (all branches)
+clip <id>               # copy entry back to clipboard
+clip get <id> -o        # print to stdout instead
+clip get <id> -p        # print file path of stored clip
+clip frequent           # show most frequently copied entries
 
 # Manage entries
-clb pin <id>
-clb delete <id>
-clb clear
+clip pin <id>           # pin (survives TTL expiry)
+clip unpin <id>
+clip delete <id>
+clip clear              # delete all entries
+clip scrub              # find & flag sensitive entries (keys, tokens)
 
 # Branches
-clb branch            # show current
-clb branch work       # switch
-clb branches          # list all
-clb move <id> <branch>
+clip branch             # show current
+clip branch work        # switch
+clip branch -           # switch back to main
+clip branches           # list all branches with counts
+clip move <id> <branch>
 ```
 
 ### TUI keybindings
@@ -112,14 +134,16 @@ clb move <id> <branch>
 | Ctrl-O | Print to stdout |
 | Ctrl-D | Delete selected |
 | Ctrl-P | Toggle pin |
+| Ctrl-T | Bump to front (most recent) |
 | Ctrl-F | Toggle frequent view |
 | Ctrl-B | Toggle branch filter |
 | Ctrl-R | Reload from DB |
 | Up/Down / Scroll | Navigate |
+| Cmd+Up / Cmd+Down | Jump to top / bottom |
 | PgUp/PgDn | Page scroll |
 | Click / Double-click | Select / Copy |
 | Drag divider | Resize preview panel |
-| Typing | Search entries (FTS5) |
+| Typing | FTS5 search (debounced, typo fallback) |
 | Esc / Ctrl-C | Exit |
 
 ### Mouse support

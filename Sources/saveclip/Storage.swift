@@ -210,11 +210,12 @@ final class Storage {
             .replacingOccurrences(of: "\"", with: "\"\"")
         let ftsQuery = "\"\(escaped)\"*"
 
+        let cols = selectCols.split(separator: ",").map { "clips." + $0.trimmingCharacters(in: .whitespaces) }.joined(separator: ", ")
         let sql: String
-        if let branch = branch {
-            sql = "SELECT \(selectCols) FROM clips WHERE id IN (SELECT rowid FROM clips_fts WHERE clips_fts MATCH ?) AND branch = ? ORDER BY timestamp DESC LIMIT ?"
+        if branch != nil {
+            sql = "SELECT \(cols) FROM clips JOIN clips_fts ON clips.id = clips_fts.rowid WHERE clips_fts MATCH ? AND clips.branch = ? ORDER BY clips.timestamp DESC LIMIT ?"
         } else {
-            sql = "SELECT \(selectCols) FROM clips WHERE id IN (SELECT rowid FROM clips_fts WHERE clips_fts MATCH ?) ORDER BY timestamp DESC LIMIT ?"
+            sql = "SELECT \(cols) FROM clips JOIN clips_fts ON clips.id = clips_fts.rowid WHERE clips_fts MATCH ? ORDER BY clips.timestamp DESC LIMIT ?"
         }
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
@@ -244,7 +245,7 @@ final class Storage {
 
     private func searchFallback(searchTerm: String, limit: Int, branch: String?) -> [ClipEntry] {
         let sql: String
-        if let branch = branch {
+        if branch != nil {
             sql = "SELECT \(selectCols) FROM clips WHERE preview LIKE ? AND branch = ? ORDER BY timestamp DESC LIMIT ?"
         } else {
             sql = "SELECT \(selectCols) FROM clips WHERE preview LIKE ? ORDER BY timestamp DESC LIMIT ?"
@@ -269,6 +270,46 @@ final class Storage {
             }
         }
         return entries
+    }
+
+    func fuzzyFallback(query: String, limit: Int = 200, branch: String? = nil) -> [ClipEntry] {
+        let entries = list(limit: limit, branch: branch)
+        let q = query.lowercased()
+        let maxDist = max(2, q.count / 3)
+
+        var scored: [(entry: ClipEntry, dist: Int)] = []
+        for entry in entries {
+            let words = entry.preview.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            var best = Int.max
+            for word in words {
+                let d = Self.levenshtein(String(word), q)
+                best = min(best, d)
+                if best == 0 { break }
+            }
+            if best <= maxDist {
+                scored.append((entry, best))
+            }
+        }
+        scored.sort { $0.dist < $1.dist }
+        return scored.map(\.entry)
+    }
+
+    private static func levenshtein(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        if a.isEmpty { return b.count }
+        if b.isEmpty { return a.count }
+        var prev = Array(0...b.count)
+        var curr = [Int](repeating: 0, count: b.count + 1)
+        for i in 1...a.count {
+            curr[0] = i
+            for j in 1...b.count {
+                curr[j] = a[i-1] == b[j-1]
+                    ? prev[j-1]
+                    : 1 + min(prev[j-1], prev[j], curr[j-1])
+            }
+            swap(&prev, &curr)
+        }
+        return prev[b.count]
     }
 
     func entryCount(branch: String? = nil) -> Int {

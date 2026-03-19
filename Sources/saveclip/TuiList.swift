@@ -45,6 +45,7 @@ struct ListState {
     var dividerHighlight: Bool = false
     var previewLines: Int = 3
     var previewScrollOffset: Int = 0
+    var previewContent: [String]? = nil
 
     mutating func setItems(_ items: [ListItem]) {
         allItems = items
@@ -123,18 +124,18 @@ enum ListRenderer {
         return fixedOverhead + previewLines
     }
 
-    static func visibleRows(regionHeight: Int, previewLines: Int = 3) -> Int {
-        return max(1, regionHeight - overhead(previewLines: previewLines))
+    static func visibleRows(termHeight: Int, previewLines: Int = 3) -> Int {
+        return max(1, termHeight - overhead(previewLines: previewLines))
     }
 
-    static func render(state: ListState, region: Region, termWidth: Int) -> ANSIBuffer {
+    static func render(state: ListState, termWidth: Int, termHeight: Int) -> ANSIBuffer {
         var buf = ANSIBuffer()
         buf.hideCursor()
 
         let width = termWidth
         let pvLines = state.previewLines
-        let listRows = visibleRows(regionHeight: region.height, previewLines: pvLines)
-        var row = region.startRow
+        let listRows = visibleRows(termHeight: termHeight, previewLines: pvLines)
+        var row = 1
 
         // ── Header ──
         buf.moveTo(row: row, col: 1)
@@ -156,7 +157,7 @@ enum ListRenderer {
         if let msg = state.message {
             hints = " - \(msg) "
         } else {
-            hints = "enter=copy  ^O=stdout  ^D=del  ^P=pin  ^F=freq  ^B=branch"
+            hints = "enter=copy  ^O=out  ^D=del  ^P=pin  ^T=top  ^F=freq  ^B=branch"
         }
         let hintsStart = max(1, width - hints.count - 1)
         buf.moveTo(row: row, col: hintsStart)
@@ -164,14 +165,25 @@ enum ListRenderer {
         row += 1
 
         // ── Preview ──
-        let selected = state.selectedItem
+        let maxPW = width - 4
         for i in 0..<pvLines {
             buf.moveTo(row: row, col: 1)
             buf.clearLine()
-            if let item = selected {
-                let previewText = previewLine(item: item, lineIndex: i, scrollOffset: state.previewScrollOffset, width: width)
-                if !previewText.isEmpty {
-                    buf.write("  \u{1B}[38;5;250m\(previewText)\u{1B}[0m")
+            if let lines = state.previewContent {
+                let lineIdx = i + state.previewScrollOffset
+                if lineIdx < lines.count {
+                    let line = truncateANSI(lines[lineIdx], maxWidth: maxPW)
+                    buf.write("  \(line)")
+                }
+            } else if let item = state.selectedItem {
+                if item.sensitive {
+                    if i == 0 { buf.write("  \u{1B}[38;5;167m[sensitive content]\u{1B}[0m") }
+                } else {
+                    let lines = item.preview.components(separatedBy: "\\n")
+                    if i < lines.count {
+                        let line = String(lines[i].prefix(maxPW))
+                        buf.write("  \u{1B}[38;5;250m\(line)\u{1B}[0m")
+                    }
                 }
             }
             row += 1
@@ -323,82 +335,27 @@ enum ListRenderer {
         }
     }
 
-    private static func previewLine(item: ListItem, lineIndex: Int, scrollOffset: Int, width: Int) -> String {
-        if item.sensitive {
-            if lineIndex == 0 { return "[sensitive content]" }
-            return ""
-        }
+    static func truncateANSI(_ str: String, maxWidth: Int) -> String {
+        var result = ""
+        var visible = 0
+        var inEscape = false
 
-        let maxWidth = width - 4
-
-        // Enhanced preview for non-text types
-        switch item.type {
-        case .image:
-            return imagePreviewLine(item: item, lineIndex: lineIndex, maxWidth: maxWidth)
-        case .filePath:
-            return filePreviewLine(item: item, lineIndex: lineIndex, maxWidth: maxWidth)
-        case .text:
-            break
-        }
-
-        return textPreviewLine(item: item, lineIndex: lineIndex + scrollOffset, maxWidth: maxWidth)
-    }
-
-    private static func imagePreviewLine(item: ListItem, lineIndex: Int, maxWidth: Int) -> String {
-        let sizeStr = formatSize(item.entry.totalSize)
-        let info = imageInfo(entry: item.entry)
-
-        switch lineIndex {
-        case 0:
-            var parts: [String] = ["Image"]
-            if let d = info.dimensions { parts.append("\(d.w)x\(d.h)") }
-            parts.append(sizeStr)
-            if let fmt = info.format { parts.append(fmt.uppercased()) }
-            return parts.joined(separator: " | ")
-        case 1:
-            var parts: [String] = []
-            if let app = item.entry.sourceApp { parts.append("from \(app)") }
-            if let reps = info.representations, reps > 1 { parts.append("\(reps) representations") }
-            return parts.isEmpty ? "" : parts.joined(separator: " | ")
-        case 2:
-            // Show stored UTI types
-            if let utis = info.utis, !utis.isEmpty {
-                return utis.joined(separator: ", ")
+        for ch in str {
+            if inEscape {
+                result.append(ch)
+                if ch.isLetter { inEscape = false }
+            } else if ch == "\u{1B}" {
+                inEscape = true
+                result.append(ch)
+            } else if visible < maxWidth {
+                result.append(ch)
+                visible += 1
+            } else {
+                break
             }
-            return ""
-        default:
-            return ""
         }
-    }
-
-    private static func filePreviewLine(item: ListItem, lineIndex: Int, maxWidth: Int) -> String {
-        switch lineIndex {
-        case 0:
-            let sizeStr = formatSize(item.entry.totalSize)
-            return "File | \(sizeStr)"
-        case 1:
-            return item.preview
-        case 2:
-            if let app = item.entry.sourceApp { return "from \(app)" }
-            return ""
-        default:
-            return ""
-        }
-    }
-
-    private static func textPreviewLine(item: ListItem, lineIndex: Int, maxWidth: Int) -> String {
-        let lines = item.preview.components(separatedBy: "\\n")
-        guard lineIndex < lines.count else { return "" }
-        let line = lines[lineIndex]
-        if line.count > maxWidth {
-            return String(line.prefix(maxWidth - 1)) + "..."
-        }
-        return line
-    }
-
-    static func previewTotalLines(item: ListItem) -> Int {
-        guard item.type == .text && !item.sensitive else { return 0 }
-        return item.preview.components(separatedBy: "\\n").count
+        result += "\u{1B}[0m"
+        return result
     }
 
     static func formatSize(_ bytes: Int) -> String {
@@ -407,74 +364,5 @@ enum ListRenderer {
         if kb < 1024 { return "\(kb) KB" }
         let mb = Double(bytes) / (1024 * 1024)
         return String(format: "%.1f MB", mb)
-    }
-
-    struct ImageInfoResult {
-        var dimensions: (w: Int, h: Int)?
-        var format: String?
-        var representations: Int?
-        var utis: [String]?
-    }
-
-    private static func imageInfo(entry: ClipEntry) -> ImageInfoResult {
-        var result = ImageInfoResult()
-        let path = entry.filePath
-        let fm = FileManager.default
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: path, isDirectory: &isDir) else { return result }
-
-        var imagePath: String = path
-
-        if isDir.boolValue {
-            let manifestPath = (path as NSString).appendingPathComponent("manifest.json")
-            if let data = fm.contents(atPath: manifestPath),
-               let manifest = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] {
-                result.representations = manifest.count
-                result.utis = manifest.compactMap { $0["uti"] }.map { shortUTI($0) }
-                let imgItem = manifest.first { ($0["uti"] ?? "").contains("png") }
-                    ?? manifest.first { ($0["uti"] ?? "").contains("tiff") }
-                if let filename = imgItem?["file"] {
-                    imagePath = (path as NSString).appendingPathComponent(filename)
-                }
-            }
-        }
-
-        guard let data = fm.contents(atPath: imagePath), data.count > 24 else { return result }
-
-        // PNG
-        if data[0] == 0x89 && data[1] == 0x50 {
-            result.format = "png"
-            let w = data.subdata(in: 16..<20).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
-            let h = data.subdata(in: 20..<24).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
-            result.dimensions = (w: Int(w), h: Int(h))
-        }
-        // TIFF (little-endian)
-        else if data[0] == 0x49 && data[1] == 0x49 {
-            result.format = "tiff"
-        }
-        // TIFF (big-endian)
-        else if data[0] == 0x4D && data[1] == 0x4D {
-            result.format = "tiff"
-        }
-
-        return result
-    }
-
-    private static func shortUTI(_ uti: String) -> String {
-        // Shorten common UTIs for display
-        switch uti {
-        case "public.utf8-plain-text": return "text"
-        case "public.html": return "html"
-        case "public.rtf": return "rtf"
-        case "public.png": return "png"
-        case "public.tiff": return "tiff"
-        case "public.file-url": return "file-url"
-        case "com.apple.webarchive": return "webarchive"
-        case "org.chromium.source-url": return "source-url"
-        default:
-            if uti.hasPrefix("public.") { return String(uti.dropFirst(7)) }
-            if uti.hasPrefix("com.apple.") { return String(uti.dropFirst(10)) }
-            return uti
-        }
     }
 }
