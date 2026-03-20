@@ -377,11 +377,12 @@ struct Add: ParsableCommand {
     var files: [String] = []
 
     func run() throws {
+        let config = Config.load()
         if !files.isEmpty {
-            let config = Config.load()
-            try addFiles(config: config)
+            let storage = try Storage(config: config)
+            let branch = BranchState.current()
+            try addFiles(storage: storage, config: config, branch: branch)
         } else {
-            let config = Config.load()
             let storage = try Storage(config: config)
             let branch = BranchState.current()
             try addStdin(storage: storage, config: config, branch: branch)
@@ -414,7 +415,7 @@ struct Add: ParsableCommand {
 
     private static let maxFiles = 20
 
-    private func addFiles(config: Config) throws {
+    private func addFiles(storage: Storage, config: Config, branch: String) throws {
         let fm = FileManager.default
 
         guard files.count <= Self.maxFiles else {
@@ -422,9 +423,9 @@ struct Add: ParsableCommand {
             throw ExitCode.failure
         }
 
-        let pace = files.count > 1 ? config.pollInterval + 0.2 : 0.0
+        var lastReps: [ClipRepresentation]?
 
-        for (i, path) in files.enumerated() {
+        for path in files {
             let absPath = path.hasPrefix("/") ? path : fm.currentDirectoryPath + "/" + path
             guard fm.fileExists(atPath: absPath) else {
                 FileHandle.standardError.write("File not found: \(path)\n".data(using: .utf8)!)
@@ -434,36 +435,32 @@ struct Add: ParsableCommand {
             let data = try Data(contentsOf: url)
             let ext = url.pathExtension.lowercased()
 
-            // Detect type via macOS UTI system
             let utType = UTType(filenameExtension: ext) ?? .data
             let uti = utType.identifier
 
             var reps: [ClipRepresentation] = []
+            reps.append(ClipRepresentation(uti: "public.file-url", data: url.absoluteString.data(using: .utf8)!, filename: "fileurl.txt"))
+            reps.append(ClipRepresentation(uti: uti, data: data, filename: ClipboardMonitor.filename(for: uti)))
 
-            // File URL representation (like Finder copy)
-            reps.append(ClipRepresentation(
-                uti: "public.file-url",
-                data: url.absoluteString.data(using: .utf8)!,
-                filename: "fileurl.txt"
-            ))
-
-            // Native content
-            reps.append(ClipRepresentation(
-                uti: uti,
-                data: data,
-                filename: ClipboardMonitor.filename(for: uti)
-            ))
-
-            // Put on system clipboard — daemon saves to DB
-            copyToPasteboard(reps)
-
-            let desc = utType.localizedDescription ?? ext
-            FileHandle.standardError.write("Copied \(url.lastPathComponent) (\(ListRenderer.formatSize(data.count)), \(desc))\n".data(using: .utf8)!)
-
-            // Pace for daemon to pick up each file
-            if i < files.count - 1 && pace > 0 {
-                Thread.sleep(forTimeInterval: pace)
+            let clipType: ClipType = utType.conforms(to: .image) ? .image : utType.conforms(to: .text) || utType.conforms(to: .sourceCode) ? .text : .filePath
+            let preview: String
+            if clipType == .text, let text = String(data: data, encoding: .utf8) {
+                preview = String(text.prefix(5000)).replacingOccurrences(of: "\n", with: "\\n")
+            } else {
+                let desc = utType.localizedDescription ?? (ext.isEmpty ? "file" : ext)
+                preview = "[\(desc) \(data.count / 1024)KB] \(url.lastPathComponent)"
             }
+
+            let content = ClipContent(representations: reps, preview: preview, primaryType: clipType, totalSize: data.count)
+            let entry = try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: config.isSensitive(preview))
+            lastReps = reps
+
+            FileHandle.standardError.write("Added \(url.lastPathComponent) (\(ListRenderer.formatSize(data.count)), \(clipType.rawValue)) id=\(entry.id)\n".data(using: .utf8)!)
+        }
+
+        // Last file goes on system clipboard
+        if let reps = lastReps {
+            copyToPasteboard(reps)
         }
     }
 
