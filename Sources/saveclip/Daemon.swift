@@ -114,6 +114,11 @@ final class Daemon {
 
             let hash = content.combinedHash
 
+            // Check skip token (set by `add` command to prevent duplicates)
+            if Daemon.consumeSkipChangeCount(NSPasteboard.general.changeCount) {
+                return
+            }
+
             // Check dedup
             if storage.isDuplicate(hash: hash) {
                 return
@@ -172,6 +177,21 @@ final class Daemon {
         let timestamp = formatter.string(from: Date())
         let line = "[\(timestamp)] \(message)"
         print(line)
+    }
+
+    static let skipChangePath = Config.defaultDir + "/skip-change"
+
+    /// Write the pasteboard changeCount so the daemon skips that specific clipboard change.
+    static func writeSkipChangeCount(_ count: Int) {
+        try? String(count).write(toFile: skipChangePath, atomically: true, encoding: .utf8)
+    }
+
+    /// If the changeCount matches the skip file, consume it and return true.
+    static func consumeSkipChangeCount(_ count: Int) -> Bool {
+        guard let stored = try? String(contentsOfFile: skipChangePath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+              stored == String(count) else { return false }
+        try? FileManager.default.removeItem(atPath: skipChangePath)
+        return true
     }
 
     static func runningPID() -> pid_t? {

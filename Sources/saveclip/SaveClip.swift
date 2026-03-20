@@ -452,6 +452,10 @@ struct Add: ParsableCommand {
             let content = ClipContent(representations: reps, preview: preview, primaryType: clipType, totalSize: data.count)
             let entry = try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: config.isSensitive(preview))
 
+            // Copy to system clipboard + tell daemon to skip it
+            copyToPasteboard(reps)
+            Daemon.writeSkipChangeCount(NSPasteboard.general.changeCount)
+
             FileHandle.standardError.write("Added \(url.lastPathComponent) (\(ListRenderer.formatSize(data.count)), \(clipType.rawValue)) id=\(entry.id)\n".data(using: .utf8)!)
         }
     }
