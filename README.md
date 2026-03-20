@@ -1,7 +1,7 @@
 # saveclip
 
 <p align="center">
-  <img src="images/saveclip-sm.png" width="200" alt="saveclip">
+  <img src="images/better-image.png" width="400" alt="saveclip">
 </p>
 
 Clipboard history daemon for macOS.
