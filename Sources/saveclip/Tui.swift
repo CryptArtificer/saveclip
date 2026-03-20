@@ -121,7 +121,8 @@ final class TuiRunner {
     private var pendingPreviewId: Int64? = nil
     private var previewCache: [Int64: [String]] = [:]
     private let batQueue = DispatchQueue(label: "saveclip.bat", qos: .userInitiated)
-    private var batResultReady = false
+    private let batLock = NSLock()
+    private var batResult: (id: Int64, lines: [String])?
 
     // bat path (detected once at startup)
     private static let batPath: String? = {
@@ -246,7 +247,21 @@ final class TuiRunner {
                     }
                 }
                 if state.message != nil { needsRender = true }
-                if batResultReady { batResultReady = false; needsRender = true }
+
+                // Check for async bat result
+                batLock.lock()
+                if let result = batResult {
+                    batResult = nil
+                    batLock.unlock()
+                    previewCache[result.id] = result.lines
+                    if state.selectedItem?.id == result.id {
+                        state.previewContent = result.lines
+                    }
+                    needsRender = true
+                } else {
+                    batLock.unlock()
+                }
+
                 continue
             }
 
@@ -629,13 +644,9 @@ final class TuiRunner {
                           let highlighted = self.highlightWithBat(truncated, width: width) else { return }
                     var hLines = highlighted.components(separatedBy: "\n")
                     hLines = hLines.map(Self.highlightURLs)
-                    DispatchQueue.main.async {
-                        self.previewCache[entryId] = hLines
-                        if self.state.selectedItem?.id == entryId {
-                            self.state.previewContent = hLines
-                            self.batResultReady = true
-                        }
-                    }
+                    self.batLock.lock()
+                    self.batResult = (id: entryId, lines: hLines)
+                    self.batLock.unlock()
                 }
             } else {
                 lines = entry.preview.components(separatedBy: "\\n")
