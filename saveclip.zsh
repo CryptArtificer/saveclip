@@ -34,32 +34,10 @@ clip() {
   local subcmd="${1:-}"
 
   case "$subcmd" in
-    --pop)
-      "$bin" pop
-      ;;
-    start|stop|status|config|clear|pin|unpin|delete|list|branches|move|paste|pop|frequent|scrub|add)
-      shift
-      "$bin" "$subcmd" "$@"
-      ;;
-    search)
-      shift
-      clb "$@"
-      ;;
-    branch)
-      shift
-      "$bin" branch "$@"
-      ;;
-    get)
-      shift
-      "$bin" get "$@"
-      ;;
-    help|--help|-h)
-      _clip_help
-      ;;
-    "")
-      # No args: print last clip to stdout
-      "$bin" paste
-      ;;
+    --pop)        "$bin" pop ;;
+    search)       shift; clb "$@" ;;
+    help|--help|-h) _clip_help ;;
+    "")           "$bin" paste ;;
     *)
       # -N → last N entries to stdout
       if [[ "$subcmd" =~ ^-([1-9][0-9]*)$ ]]; then
@@ -69,10 +47,10 @@ clip() {
       # Positive number → get entry by ID
       elif [[ "$subcmd" =~ ^[0-9]+$ ]]; then
         "$bin" get "$subcmd"
+      # Everything else → pass through to binary
       else
-        echo "\033[31mUnknown command:\033[0m $subcmd"
-        _clip_help
-        return 1
+        shift
+        "$bin" "$subcmd" "$@"
       fi
       ;;
   esac
