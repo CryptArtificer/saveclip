@@ -476,13 +476,15 @@ struct Add: ParsableCommand {
 
     private func copyToPasteboard(_ reps: [ClipRepresentation], skip: Bool = false) {
         let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
+        let item = NSPasteboardItem()
         for rep in reps {
-            pasteboard.setData(rep.data, forType: NSPasteboard.PasteboardType(rep.uti))
+            item.setData(rep.data, forType: NSPasteboard.PasteboardType(rep.uti))
         }
         if skip {
-            pasteboard.setData(Data(), forType: Self.skipMarkerType)
+            item.setData(Data(), forType: Self.skipMarkerType)
         }
+        pasteboard.clearContents()
+        pasteboard.writeObjects([item])
     }
 }
 

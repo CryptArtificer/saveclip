@@ -104,6 +104,12 @@ final class Daemon {
         // We need a RunLoop for NSPasteboard to work properly
         let timer = Timer(timeInterval: config.pollInterval, repeats: true) { _ in
             guard monitor.hasChanged() else { return }
+
+            // Skip if placed by `add` command
+            if NSPasteboard.general.data(forType: Add.skipMarkerType) != nil {
+                return
+            }
+
             guard let content = monitor.currentContent() else { return }
 
             // Check size limit
@@ -113,11 +119,6 @@ final class Daemon {
             }
 
             let hash = content.combinedHash
-
-            // Skip if placed by `add` command
-            if NSPasteboard.general.data(forType: Add.skipMarkerType) != nil {
-                return
-            }
 
             // Check dedup
             if storage.isDuplicate(hash: hash) {
