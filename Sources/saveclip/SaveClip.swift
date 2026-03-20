@@ -366,23 +366,34 @@ struct Paste: ParsableCommand {
 struct Add: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "add",
-        abstract: "Add text from stdin to clipboard history"
+        abstract: "Add text from stdin or files to clipboard history"
     )
 
     @Flag(name: .shortAndLong, help: "Slurp all input as one entry (ignore null delimiters)")
     var slurp = false
 
+    @Argument(help: "Files to add (omit to read from stdin)")
+    var files: [String] = []
+
     func run() throws {
+        let config = Config.load()
+        let storage = try Storage(config: config)
+        let branch = BranchState.current()
+
+        if !files.isEmpty {
+            try addFiles(storage: storage, config: config, branch: branch)
+        } else {
+            try addStdin(storage: storage, config: config, branch: branch)
+        }
+    }
+
+    private func addStdin(storage: Storage, config: Config, branch: String) throws {
         let inputData = FileHandle.standardInput.readDataToEndOfFile()
         guard !inputData.isEmpty,
               let input = String(data: inputData, encoding: .utf8) else {
             FileHandle.standardError.write("No input on stdin.\n".data(using: .utf8)!)
             throw ExitCode.failure
         }
-
-        let config = Config.load()
-        let storage = try Storage(config: config)
-        let branch = BranchState.current()
 
         if slurp {
             var text = input
@@ -398,6 +409,70 @@ struct Add: ParsableCommand {
 
         // Tee: pass through raw input
         FileHandle.standardOutput.write(inputData)
+    }
+
+    private func addFiles(storage: Storage, config: Config, branch: String) throws {
+        let fm = FileManager.default
+        for path in files {
+            let absPath = path.hasPrefix("/") ? path : fm.currentDirectoryPath + "/" + path
+            guard fm.fileExists(atPath: absPath) else {
+                FileHandle.standardError.write("File not found: \(path)\n".data(using: .utf8)!)
+                continue
+            }
+            let url = URL(fileURLWithPath: absPath)
+            let data = try Data(contentsOf: url)
+            let ext = url.pathExtension.lowercased()
+
+            var reps: [ClipRepresentation] = []
+            let clipType: ClipType
+            let preview: String
+
+            // File URL representation (like Finder copy)
+            let fileURL = url.absoluteString
+            reps.append(ClipRepresentation(
+                uti: "public.file-url",
+                data: fileURL.data(using: .utf8)!,
+                filename: "fileurl.txt"
+            ))
+
+            switch ext {
+            case "png":
+                reps.append(ClipRepresentation(uti: "public.png", data: data, filename: "image.png"))
+                clipType = .image
+                preview = "[image \(data.count / 1024)KB] \(url.lastPathComponent)"
+            case "jpg", "jpeg":
+                reps.append(ClipRepresentation(uti: "public.jpeg", data: data, filename: "image.jpg"))
+                clipType = .image
+                preview = "[image \(data.count / 1024)KB] \(url.lastPathComponent)"
+            case "tiff", "tif":
+                reps.append(ClipRepresentation(uti: "public.tiff", data: data, filename: "image.tiff"))
+                clipType = .image
+                preview = "[image \(data.count / 1024)KB] \(url.lastPathComponent)"
+            case "gif":
+                reps.append(ClipRepresentation(uti: "com.compuserve.gif", data: data, filename: "image.gif"))
+                clipType = .image
+                preview = "[image \(data.count / 1024)KB] \(url.lastPathComponent)"
+            case "pdf":
+                reps.append(ClipRepresentation(uti: "com.adobe.pdf", data: data, filename: "document.pdf"))
+                clipType = .filePath
+                preview = "[pdf \(data.count / 1024)KB] \(url.lastPathComponent)"
+            default:
+                // Try as text, fall back to binary file reference
+                if let text = String(data: data, encoding: .utf8) {
+                    reps.append(ClipRepresentation(uti: "public.utf8-plain-text", data: data, filename: "text.txt"))
+                    clipType = .text
+                    preview = String(text.prefix(5000)).replacingOccurrences(of: "\n", with: "\\n")
+                } else {
+                    clipType = .filePath
+                    preview = "[\(ext.isEmpty ? "file" : ext) \(data.count / 1024)KB] \(url.lastPathComponent)"
+                }
+            }
+
+            let content = ClipContent(representations: reps, preview: preview, primaryType: clipType, totalSize: data.count)
+            let sensitive = config.isSensitive(preview)
+            let entry = try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: sensitive)
+            FileHandle.standardError.write("Added \(url.lastPathComponent) (\(ListRenderer.formatSize(data.count)), \(clipType.rawValue)) id=\(entry.id)\n".data(using: .utf8)!)
+        }
     }
 
     private func saveText(_ text: String, storage: Storage, config: Config, branch: String) throws {

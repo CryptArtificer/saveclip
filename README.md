@@ -21,6 +21,7 @@ and restore entries instantly.
 - **Full fidelity** — stores every pasteboard representation (rich text, HTML, images, source URLs), not just plain text
 - **Built-in TUI** — fullscreen terminal picker with FTS5 search (+ typo fallback), syntax-highlighted preview (via `bat`), image preview (half-block 24-bit color), mouse support, and inline actions
 - **Pipe mode** — `clip` works like `pbcopy`/`pbpaste`: `echo foo | clip` saves, `clip` outputs, `... | clip | ...` tees through
+- **File import** — `clip add photo.png` saves files with path info + native content (like a Finder copy)
 - **Auto-refresh** — TUI updates live as new clipboard entries arrive
 - **Mouse support** — click to select, double-click to copy, scroll wheel, draggable preview/list divider
 - **Adaptive colors** — detects terminal fg/bg colors via OSC 10/11, age-based grey gradient that works in dark and light modes, reacts to theme changes live
@@ -102,6 +103,11 @@ cat file | clip         # save entire file as one entry
 ... | clip | jq         # tee: saves and passes through
 ... | clip -s           # slurp all stdin as one entry
 printf 'a\0b\0c' | clip  # null-delimited → 3 separate entries
+
+# Add files (images, PDFs, any file)
+clip add photo.png          # saves with file URL + image data
+clip add a.png b.txt c.pdf  # multiple files, each a separate entry
+clip add *.png              # glob works naturally
 
 # List / get entries
 clip list               # list entries (current branch)

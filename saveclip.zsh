@@ -134,6 +134,12 @@ _clip_help() {
   echo -e "  ${_d}Default splits on \\0 (null bytes). No nulls = one entry.${_r}"
   echo -e "  ${_d}printf 'a\\\\0b\\\\0c' | clip  → saves 3 separate entries${_r}"
   echo -e ""
+  echo -e "${_m}  Files${_r} ${_d}(images, PDFs, any file)${_r}"
+  echo -e "${_d}  ─────────────────────────────────────────${_r}"
+  echo -e "  ${_c}clip add${_r} ${_d}<file> [file...]${_r}  Add files to clipboard history"
+  echo -e "  ${_d}Stores file URL (like Finder) + native content (PNG, JPEG, etc.)."
+  echo -e "  Text files are auto-detected. Multiple files = separate entries.${_r}"
+  echo -e ""
   echo -e "${_m}  Browse${_r}"
   echo -e "${_d}  ─────────────────────────────────────────${_r}"
   echo -e "  ${_c}clip list${_r}         List entries (current branch)"
@@ -190,7 +196,7 @@ _clip() {
     'get:Copy entry back to clipboard'
     'list:List recent entries'
     'paste:Print entries to stdout'
-    'add:Add text from stdin'
+    'add:Add files or stdin to clipboard history'
     'pin:Pin an entry'
     'unpin:Unpin an entry'
     'delete:Delete an entry'
@@ -211,6 +217,9 @@ _clip() {
   fi
 
   case "${words[2]}" in
+    add)
+      _files
+      ;;
     get|pin|unpin|delete)
       if (( CURRENT == 3 )); then
         local bin; bin=$(_saveclip_bin)
