@@ -423,8 +423,6 @@ struct Add: ParsableCommand {
             throw ExitCode.failure
         }
 
-        var lastReps: [ClipRepresentation]?
-
         for path in files {
             let absPath = path.hasPrefix("/") ? path : fm.currentDirectoryPath + "/" + path
             guard fm.fileExists(atPath: absPath) else {
@@ -453,14 +451,8 @@ struct Add: ParsableCommand {
 
             let content = ClipContent(representations: reps, preview: preview, primaryType: clipType, totalSize: data.count)
             let entry = try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: config.isSensitive(preview))
-            lastReps = reps
 
             FileHandle.standardError.write("Added \(url.lastPathComponent) (\(ListRenderer.formatSize(data.count)), \(clipType.rawValue)) id=\(entry.id)\n".data(using: .utf8)!)
-        }
-
-        // Last file goes on system clipboard
-        if let reps = lastReps {
-            copyToPasteboard(reps)
         }
     }
 
