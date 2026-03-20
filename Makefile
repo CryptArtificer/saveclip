@@ -31,6 +31,17 @@ install: release
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m 755 $(BINARY) $(DESTDIR)$(PREFIX)/bin/saveclip
 
+deploy: release
+	@echo "Installing to $(PREFIX)/bin and ~/.local/bin..."
+	install -d $(DESTDIR)$(PREFIX)/bin
+	install -m 755 $(BINARY) $(DESTDIR)$(PREFIX)/bin/saveclip
+	mkdir -p $(HOME)/.local/bin
+	cp $(BINARY) $(HOME)/.local/bin/saveclip
+	@echo "Restarting daemon..."
+	-launchctl kickstart -k gui/$$(id -u)/com.johjoh.saveclip 2>/dev/null || \
+		($(BINARY) stop 2>/dev/null; sleep 0.5; $(BINARY) start)
+	@echo "Done."
+
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/saveclip
 	rm -f $(ZSH_DST)
