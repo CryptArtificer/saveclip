@@ -1,6 +1,7 @@
 import Compression
 import Foundation
 import SQLite3
+import UniformTypeIdentifiers
 import zlib
 
 final class Storage {
@@ -521,17 +522,19 @@ final class Storage {
             return nil
         }
 
-        // Find the best representation for the primary type
-        let preferredUTIs: [String]
+        // Find the best representation by UTI conformance
+        let target: [String: String]?
         switch type {
-        case .text: preferredUTIs = ["public.utf8-plain-text"]
-        case .image: preferredUTIs = ["public.png", "public.jpeg", "public.tiff", "com.compuserve.gif"]
-        case .filePath: preferredUTIs = ["public.file-url"]
+        case .text:
+            target = manifest.first { $0["uti"] == "public.utf8-plain-text" }
+                  ?? manifest.first { $0["uti"].flatMap({ UTType($0) })?.conforms(to: .text) == true }
+        case .image:
+            target = manifest.first { $0["uti"].flatMap({ UTType($0) })?.conforms(to: .image) == true }
+        case .filePath:
+            target = manifest.first { $0["uti"] == "public.file-url" }
         }
-
-        // Try preferred UTIs in order, then fall back to first item
-        let target = preferredUTIs.lazy.compactMap { pref in manifest.first { $0["uti"] == pref } }.first ?? manifest.first
-        guard let filename = target?["file"] else { return nil }
+        let resolved = target ?? manifest.first
+        guard let filename = resolved?["file"] else { return nil }
         let filePath = (path as NSString).appendingPathComponent(filename)
         return fm.contents(atPath: filePath)
     }

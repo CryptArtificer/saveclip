@@ -1,6 +1,7 @@
 import AppKit
 import ArgumentParser
 import Foundation
+import UniformTypeIdentifiers
 
 private func printEntries(_ entries: [ClipEntry], showBranch: Bool = false) {
     let now = Date()
@@ -435,37 +436,29 @@ struct Add: ParsableCommand {
                 filename: "fileurl.txt"
             ))
 
-            switch ext {
-            case "png":
-                reps.append(ClipRepresentation(uti: "public.png", data: data, filename: "image.png"))
+            // Detect type via macOS UTI system
+            let utType = UTType(filenameExtension: ext) ?? .data
+            let uti = utType.identifier
+            let bundleFilename = ClipboardMonitor.filename(for: uti)
+
+            if utType.conforms(to: .image) {
+                reps.append(ClipRepresentation(uti: uti, data: data, filename: bundleFilename))
                 clipType = .image
                 preview = "[image \(data.count / 1024)KB] \(url.lastPathComponent)"
-            case "jpg", "jpeg":
-                reps.append(ClipRepresentation(uti: "public.jpeg", data: data, filename: "image.jpg"))
-                clipType = .image
-                preview = "[image \(data.count / 1024)KB] \(url.lastPathComponent)"
-            case "tiff", "tif":
-                reps.append(ClipRepresentation(uti: "public.tiff", data: data, filename: "image.tiff"))
-                clipType = .image
-                preview = "[image \(data.count / 1024)KB] \(url.lastPathComponent)"
-            case "gif":
-                reps.append(ClipRepresentation(uti: "com.compuserve.gif", data: data, filename: "image.gif"))
-                clipType = .image
-                preview = "[image \(data.count / 1024)KB] \(url.lastPathComponent)"
-            case "pdf":
-                reps.append(ClipRepresentation(uti: "com.adobe.pdf", data: data, filename: "document.pdf"))
-                clipType = .filePath
-                preview = "[pdf \(data.count / 1024)KB] \(url.lastPathComponent)"
-            default:
-                // Try as text, fall back to binary file reference
+            } else if utType.conforms(to: .text) || utType.conforms(to: .sourceCode) {
                 if let text = String(data: data, encoding: .utf8) {
                     reps.append(ClipRepresentation(uti: "public.utf8-plain-text", data: data, filename: "text.txt"))
                     clipType = .text
                     preview = String(text.prefix(5000)).replacingOccurrences(of: "\n", with: "\\n")
                 } else {
+                    reps.append(ClipRepresentation(uti: uti, data: data, filename: bundleFilename))
                     clipType = .filePath
-                    preview = "[\(ext.isEmpty ? "file" : ext) \(data.count / 1024)KB] \(url.lastPathComponent)"
+                    preview = "[\(utType.localizedDescription ?? ext) \(data.count / 1024)KB] \(url.lastPathComponent)"
                 }
+            } else {
+                reps.append(ClipRepresentation(uti: uti, data: data, filename: bundleFilename))
+                clipType = .filePath
+                preview = "[\(utType.localizedDescription ?? ext) \(data.count / 1024)KB] \(url.lastPathComponent)"
             }
 
             let content = ClipContent(representations: reps, preview: preview, primaryType: clipType, totalSize: data.count)
