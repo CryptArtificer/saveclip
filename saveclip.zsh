@@ -37,7 +37,7 @@ clip() {
     --pop)
       "$bin" pop
       ;;
-    start|stop|status|config|clear|pin|unpin|delete|list|branches|move|paste|pop|frequent|scrub)
+    start|stop|status|config|clear|pin|unpin|delete|list|branches|move|paste|pop|frequent|scrub|add)
       shift
       "$bin" "$subcmd" "$@"
       ;;
