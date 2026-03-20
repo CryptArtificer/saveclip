@@ -96,7 +96,7 @@ final class ClipboardMonitor {
 
         // Text (possibly with rich/HTML/image representations — all stored regardless)
         if let str = pasteboard.string(forType: .string), !str.isEmpty {
-            let preview = String(str.prefix(200)).replacingOccurrences(of: "\n", with: "\\n")
+            let preview = String(str.prefix(5000)).replacingOccurrences(of: "\n", with: "\\n")
             return (.text, preview)
         }
 

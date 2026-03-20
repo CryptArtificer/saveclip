@@ -120,6 +120,8 @@ final class TuiRunner {
     private var lastCursorMoveTime: Date = .distantPast
     private var pendingPreviewId: Int64? = nil
     private var previewCache: [Int64: [String]] = [:]
+    private let batQueue = DispatchQueue(label: "saveclip.bat", qos: .userInitiated)
+    private var batResultReady = false
 
     // bat path (detected once at startup)
     private static let batPath: String? = {
@@ -244,6 +246,7 @@ final class TuiRunner {
                     }
                 }
                 if state.message != nil { needsRender = true }
+                if batResultReady { batResultReady = false; needsRender = true }
                 continue
             }
 
@@ -612,15 +615,27 @@ final class TuiRunner {
             if entry.sensitive || (!state.unsafeMode && SensitiveDetector.isSensitive(entry.preview)) {
                 lines = ["[sensitive content]"]
             } else if entry.totalSize > 64 * 1024 {
-                // Too large — stick with DB preview
                 lines = entry.preview.components(separatedBy: "\\n")
             } else if let data = storage.readClipData(entry: entry),
                       let text = String(data: data, encoding: .utf8) {
                 let truncated = String(text.prefix(16384))
-                if let highlighted = highlightWithBat(truncated, width: lastCols - 4) {
-                    lines = highlighted.components(separatedBy: "\n")
-                } else {
-                    lines = truncated.components(separatedBy: "\n")
+                // Show plain text immediately
+                lines = truncated.components(separatedBy: "\n")
+                // Dispatch bat highlighting async
+                let width = lastCols - 4
+                let entryId = id
+                batQueue.async { [weak self] in
+                    guard let self = self,
+                          let highlighted = self.highlightWithBat(truncated, width: width) else { return }
+                    var hLines = highlighted.components(separatedBy: "\n")
+                    hLines = hLines.map(Self.highlightURLs)
+                    DispatchQueue.main.async {
+                        self.previewCache[entryId] = hLines
+                        if self.state.selectedItem?.id == entryId {
+                            self.state.previewContent = hLines
+                            self.batResultReady = true
+                        }
+                    }
                 }
             } else {
                 lines = entry.preview.components(separatedBy: "\\n")
@@ -628,10 +643,12 @@ final class TuiRunner {
         }
 
         lines = lines.map(Self.highlightURLs)
+        cachePreview(id: id, lines: lines)
+    }
+
+    private func cachePreview(id: Int64, lines: [String]) {
         previewCache[id] = lines
         state.previewContent = lines
-
-        // Keep cache bounded
         if previewCache.count > 50 {
             let keysToRemove = Array(previewCache.keys.prefix(25))
             for k in keysToRemove { previewCache.removeValue(forKey: k) }

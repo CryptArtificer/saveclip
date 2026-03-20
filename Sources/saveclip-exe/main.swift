@@ -1,0 +1,3 @@
+import SaveClipLib
+
+SaveClip.main()

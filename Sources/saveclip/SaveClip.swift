@@ -68,9 +68,9 @@ func relativeTime(from date: Date, to now: Date, calendar: Calendar) -> String {
     return "old"
 }
 
-@main
-struct SaveClip: ParsableCommand {
-    static let configuration = CommandConfiguration(
+public struct SaveClip: ParsableCommand {
+    public init() {}
+    public static let configuration = CommandConfiguration(
         commandName: "saveclip",
         abstract: "Clipboard history daemon for macOS",
         subcommands: [Start.self, Stop.self, Status.self, List.self, Get.self, Search.self, Paste.self, Pop.self, Frequent.self, Pin.self, Unpin.self, Delete.self, DeleteMatching.self, Scrub.self, Clear.self, BranchCmd.self, BranchesCmd.self, MoveCmd.self, ConfigCmd.self, DaemonCmd.self, TuiCommand.self, Add.self]
@@ -404,7 +404,7 @@ struct Add: ParsableCommand {
         guard !text.isEmpty else { return }
         let data = text.data(using: .utf8)!
         let rep = ClipRepresentation(uti: "public.utf8-plain-text", data: data, filename: "text.txt")
-        let preview = String(text.prefix(200)).replacingOccurrences(of: "\n", with: "\\n")
+        let preview = String(text.prefix(5000)).replacingOccurrences(of: "\n", with: "\\n")
         let content = ClipContent(representations: [rep], preview: preview, primaryType: .text, totalSize: data.count)
         let sensitive = config.isSensitive(preview)
         try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: sensitive)
@@ -518,12 +518,23 @@ struct Delete: ParsableCommand {
     @Argument(help: "Entry ID")
     var id: Int64
 
+    @Flag(name: .shortAndLong, help: "Skip confirmation")
+    var yes = false
+
     func run() throws {
         let config = Config.load()
         let storage = try Storage(config: config)
-        guard storage.get(id: id) != nil else {
+        guard let entry = storage.get(id: id) else {
             print("Entry \(id) not found")
             throw ExitCode.failure
+        }
+        if !yes {
+            let preview = String(entry.preview.prefix(60))
+            print("Delete entry \(id) (\(preview))? [y/N] ", terminator: "")
+            guard let answer = readLine(), answer.lowercased() == "y" else {
+                print("Cancelled.")
+                return
+            }
         }
         try storage.delete(id: id)
         print("Deleted entry \(id)")

@@ -9,11 +9,11 @@ final class Storage {
 
     private let selectCols = "id, timestamp, type, hash, preview, file_path, source_app, pinned, branch, sensitive, total_size, copy_count"
 
-    init(config: Config) throws {
+    init(config: Config, dbPath: String? = nil) throws {
         self.config = config
         try config.ensureDirectories()
 
-        let dbPath = Config.defaultDir + "/index.db"
+        let dbPath = dbPath ?? Config.defaultDir + "/index.db"
         guard sqlite3_open(dbPath, &db) == SQLITE_OK else {
             throw StorageError.cannotOpenDB(String(cString: sqlite3_errmsg(db)))
         }
@@ -63,8 +63,11 @@ final class Storage {
                 INSERT INTO clips_fts(rowid, preview) VALUES (new.id, new.preview);
             END
         """)
-        // Rebuild FTS index from existing data (fast, idempotent)
-        try? execute("INSERT INTO clips_fts(clips_fts) VALUES ('rebuild')")
+        // One-time FTS rebuild for pre-trigger data, then skip
+        if userVersion() < 2 {
+            try? execute("INSERT INTO clips_fts(clips_fts) VALUES ('rebuild')")
+            try? execute("PRAGMA user_version = 2")
+        }
     }
 
     deinit {
@@ -86,7 +89,7 @@ final class Storage {
         if sqlite3_step(stmt) == SQLITE_ROW {
             let id = sqlite3_column_int64(stmt, 0)
             // Bump copy count and refresh timestamp
-            try? execute("UPDATE clips SET copy_count = copy_count + 1, timestamp = \(Date().timeIntervalSince1970) WHERE id = \(id)")
+            try? executeById("UPDATE clips SET copy_count = copy_count + 1, timestamp = \(Date().timeIntervalSince1970) WHERE id = ?", id: id)
             return true
         }
         return false
@@ -170,8 +173,8 @@ final class Storage {
         // Deduplicate by hash — keep the entry with the latest timestamp per unique content
         let dedup = "(SELECT id FROM clips c2 WHERE c2.hash = clips.hash ORDER BY c2.timestamp DESC LIMIT 1)"
         let sql: String
-        if let branch = branch {
-            sql = "SELECT \(selectCols) FROM clips WHERE branch = '\(branch.replacingOccurrences(of: "'", with: "''"))' AND id = \(dedup) ORDER BY timestamp DESC LIMIT ?"
+        if branch != nil {
+            sql = "SELECT \(selectCols) FROM clips WHERE branch = ? AND id = \(dedup) ORDER BY timestamp DESC LIMIT ?"
         } else {
             sql = "SELECT \(selectCols) FROM clips WHERE id = \(dedup) ORDER BY timestamp DESC LIMIT ?"
         }
@@ -179,7 +182,12 @@ final class Storage {
         defer { sqlite3_finalize(stmt) }
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
-        sqlite3_bind_int(stmt, 1, Int32(limit))
+        if let branch = branch {
+            sqlite3_bind_text(stmt, 1, (branch as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 2, Int32(limit))
+        } else {
+            sqlite3_bind_int(stmt, 1, Int32(limit))
+        }
 
         var entries: [ClipEntry] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
@@ -314,8 +322,8 @@ final class Storage {
 
     func entryCount(branch: String? = nil) -> Int {
         let sql: String
-        if let branch = branch {
-            sql = "SELECT COUNT(*) FROM clips WHERE branch = '\(branch.replacingOccurrences(of: "'", with: "''"))'"
+        if branch != nil {
+            sql = "SELECT COUNT(*) FROM clips WHERE branch = ?"
         } else {
             sql = "SELECT COUNT(*) FROM clips"
         }
@@ -323,6 +331,9 @@ final class Storage {
         defer { sqlite3_finalize(stmt) }
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        if let branch = branch {
+            sqlite3_bind_text(stmt, 1, (branch as NSString).utf8String, -1, nil)
+        }
         if sqlite3_step(stmt) == SQLITE_ROW {
             return Int(sqlite3_column_int(stmt, 0))
         }
@@ -378,25 +389,45 @@ final class Storage {
     }
 
     func moveToBranch(id: Int64, branch: String) throws {
-        try execute("UPDATE clips SET branch = '\(branch.replacingOccurrences(of: "'", with: "''"))' WHERE id = \(id)")
+        let sql = "UPDATE clips SET branch = ? WHERE id = ?"
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw StorageError.queryFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_text(stmt, 1, (branch as NSString).utf8String, -1, nil)
+        sqlite3_bind_int64(stmt, 2, id)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw StorageError.queryFailed(String(cString: sqlite3_errmsg(db)))
+        }
     }
 
     // MARK: - Modify
 
     func markSensitive(id: Int64) throws {
-        try execute("UPDATE clips SET sensitive = 1 WHERE id = \(id)")
+        try executeById("UPDATE clips SET sensitive = 1 WHERE id = ?", id: id)
     }
 
     func pin(id: Int64) throws {
-        try execute("UPDATE clips SET pinned = 1 WHERE id = \(id)")
+        try executeById("UPDATE clips SET pinned = 1 WHERE id = ?", id: id)
     }
 
     func unpin(id: Int64) throws {
-        try execute("UPDATE clips SET pinned = 0 WHERE id = \(id)")
+        try executeById("UPDATE clips SET pinned = 0 WHERE id = ?", id: id)
     }
 
     func bumpToFront(id: Int64) throws {
-        try execute("UPDATE clips SET copy_count = copy_count + 1, timestamp = \(Date().timeIntervalSince1970) WHERE id = \(id)")
+        let sql = "UPDATE clips SET copy_count = copy_count + 1, timestamp = ? WHERE id = ?"
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw StorageError.queryFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_double(stmt, 1, Date().timeIntervalSince1970)
+        sqlite3_bind_int64(stmt, 2, id)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw StorageError.queryFailed(String(cString: sqlite3_errmsg(db)))
+        }
     }
 
     func delete(id: Int64) throws {
@@ -407,7 +438,7 @@ final class Storage {
                 try? fm.removeItem(atPath: entry.filePath)
             }
         }
-        try execute("DELETE FROM clips WHERE id = \(id)")
+        try executeById("DELETE FROM clips WHERE id = ?", id: id)
     }
 
     func clearAll() throws {
@@ -541,7 +572,7 @@ final class Storage {
                 do {
                     try compressed.write(to: URL(fileURLWithPath: compressedPath))
                     try fm.removeItem(atPath: path)
-                    try execute("UPDATE clips SET file_path = '\(compressedPath.replacingOccurrences(of: "'", with: "''"))' WHERE id = \(id)")
+                    try executeUpdate("UPDATE clips SET file_path = ? WHERE id = ?", text: compressedPath, id: id)
                 } catch {
                     try? fm.removeItem(atPath: compressedPath)
                 }
@@ -700,12 +731,45 @@ final class Storage {
         return output
     }
 
+    private func userVersion() -> Int {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &stmt, nil) == SQLITE_OK,
+              sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int(stmt, 0))
+    }
+
     private func execute(_ sql: String) throws {
         var errMsg: UnsafeMutablePointer<CChar>?
         guard sqlite3_exec(db, sql, nil, nil, &errMsg) == SQLITE_OK else {
             let msg = errMsg.map { String(cString: $0) } ?? "unknown error"
             sqlite3_free(errMsg)
             throw StorageError.queryFailed(msg)
+        }
+    }
+
+    private func executeById(_ sql: String, id: Int64) throws {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw StorageError.queryFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_int64(stmt, 1, id)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw StorageError.queryFailed(String(cString: sqlite3_errmsg(db)))
+        }
+    }
+
+    private func executeUpdate(_ sql: String, text: String, id: Int64) throws {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw StorageError.queryFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_bind_text(stmt, 1, (text as NSString).utf8String, -1, nil)
+        sqlite3_bind_int64(stmt, 2, id)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw StorageError.queryFailed(String(cString: sqlite3_errmsg(db)))
         }
     }
 }
