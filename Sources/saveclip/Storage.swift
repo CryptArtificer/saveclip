@@ -522,15 +522,15 @@ final class Storage {
         }
 
         // Find the best representation for the primary type
-        let preferredUTI: String
+        let preferredUTIs: [String]
         switch type {
-        case .text: preferredUTI = "public.utf8-plain-text"
-        case .image: preferredUTI = "public.png"
-        case .filePath: preferredUTI = "public.file-url"
+        case .text: preferredUTIs = ["public.utf8-plain-text"]
+        case .image: preferredUTIs = ["public.png", "public.jpeg", "public.tiff", "com.compuserve.gif"]
+        case .filePath: preferredUTIs = ["public.file-url"]
         }
 
-        // Try preferred first, then fall back to first item
-        let target = manifest.first { $0["uti"] == preferredUTI } ?? manifest.first
+        // Try preferred UTIs in order, then fall back to first item
+        let target = preferredUTIs.lazy.compactMap { pref in manifest.first { $0["uti"] == pref } }.first ?? manifest.first
         guard let filename = target?["file"] else { return nil }
         let filePath = (path as NSString).appendingPathComponent(filename)
         return fm.contents(atPath: filePath)
