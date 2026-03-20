@@ -452,9 +452,8 @@ struct Add: ParsableCommand {
             let content = ClipContent(representations: reps, preview: preview, primaryType: clipType, totalSize: data.count)
             let entry = try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: config.isSensitive(preview))
 
-            // Copy to system clipboard + tell daemon to skip it
-            copyToPasteboard(reps)
-            Daemon.writeSkipChangeCount(NSPasteboard.general.changeCount)
+            // Copy to system clipboard with skip marker
+            copyToPasteboard(reps, skip: true)
 
             FileHandle.standardError.write("Added \(url.lastPathComponent) (\(ListRenderer.formatSize(data.count)), \(clipType.rawValue)) id=\(entry.id)\n".data(using: .utf8)!)
         }
@@ -473,11 +472,16 @@ struct Add: ParsableCommand {
         copyToPasteboard([rep])
     }
 
-    private func copyToPasteboard(_ reps: [ClipRepresentation]) {
+    static let skipMarkerType = NSPasteboard.PasteboardType("com.saveclip.already-saved")
+
+    private func copyToPasteboard(_ reps: [ClipRepresentation], skip: Bool = false) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         for rep in reps {
             pasteboard.setData(rep.data, forType: NSPasteboard.PasteboardType(rep.uti))
+        }
+        if skip {
+            pasteboard.setData(Data(), forType: Self.skipMarkerType)
         }
     }
 }
