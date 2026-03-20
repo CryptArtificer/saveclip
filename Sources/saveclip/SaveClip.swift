@@ -464,6 +464,10 @@ struct Add: ParsableCommand {
             let content = ClipContent(representations: reps, preview: preview, primaryType: clipType, totalSize: data.count)
             let sensitive = config.isSensitive(preview)
             let entry = try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: sensitive)
+
+            // Put on system clipboard
+            copyToPasteboard(reps)
+
             FileHandle.standardError.write("Added \(url.lastPathComponent) (\(ListRenderer.formatSize(data.count)), \(clipType.rawValue)) id=\(entry.id)\n".data(using: .utf8)!)
         }
     }
@@ -476,6 +480,17 @@ struct Add: ParsableCommand {
         let content = ClipContent(representations: [rep], preview: preview, primaryType: .text, totalSize: data.count)
         let sensitive = config.isSensitive(preview)
         try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: sensitive)
+
+        // Put on system clipboard
+        copyToPasteboard([rep])
+    }
+
+    private func copyToPasteboard(_ reps: [ClipRepresentation]) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        for rep in reps {
+            pasteboard.setData(rep.data, forType: NSPasteboard.PasteboardType(rep.uti))
+        }
     }
 }
 
