@@ -377,13 +377,13 @@ struct Add: ParsableCommand {
     var files: [String] = []
 
     func run() throws {
-        let config = Config.load()
-        let storage = try Storage(config: config)
-        let branch = BranchState.current()
-
         if !files.isEmpty {
-            try addFiles(storage: storage, config: config, branch: branch)
+            let config = Config.load()
+            try addFiles(config: config)
         } else {
+            let config = Config.load()
+            let storage = try Storage(config: config)
+            let branch = BranchState.current()
             try addStdin(storage: storage, config: config, branch: branch)
         }
     }
@@ -412,9 +412,19 @@ struct Add: ParsableCommand {
         FileHandle.standardOutput.write(inputData)
     }
 
-    private func addFiles(storage: Storage, config: Config, branch: String) throws {
+    private static let maxFiles = 20
+
+    private func addFiles(config: Config) throws {
         let fm = FileManager.default
-        for path in files {
+
+        guard files.count <= Self.maxFiles else {
+            FileHandle.standardError.write("Too many files (\(files.count)). Max \(Self.maxFiles) at a time.\n".data(using: .utf8)!)
+            throw ExitCode.failure
+        }
+
+        let pace = files.count > 1 ? config.pollInterval + 0.2 : 0.0
+
+        for (i, path) in files.enumerated() {
             let absPath = path.hasPrefix("/") ? path : fm.currentDirectoryPath + "/" + path
             guard fm.fileExists(atPath: absPath) else {
                 FileHandle.standardError.write("File not found: \(path)\n".data(using: .utf8)!)
@@ -424,51 +434,36 @@ struct Add: ParsableCommand {
             let data = try Data(contentsOf: url)
             let ext = url.pathExtension.lowercased()
 
-            var reps: [ClipRepresentation] = []
-            let clipType: ClipType
-            let preview: String
-
-            // File URL representation (like Finder copy)
-            let fileURL = url.absoluteString
-            reps.append(ClipRepresentation(
-                uti: "public.file-url",
-                data: fileURL.data(using: .utf8)!,
-                filename: "fileurl.txt"
-            ))
-
             // Detect type via macOS UTI system
             let utType = UTType(filenameExtension: ext) ?? .data
             let uti = utType.identifier
-            let bundleFilename = ClipboardMonitor.filename(for: uti)
 
-            if utType.conforms(to: .image) {
-                reps.append(ClipRepresentation(uti: uti, data: data, filename: bundleFilename))
-                clipType = .image
-                preview = "[image \(data.count / 1024)KB] \(url.lastPathComponent)"
-            } else if utType.conforms(to: .text) || utType.conforms(to: .sourceCode) {
-                if let text = String(data: data, encoding: .utf8) {
-                    reps.append(ClipRepresentation(uti: "public.utf8-plain-text", data: data, filename: "text.txt"))
-                    clipType = .text
-                    preview = String(text.prefix(5000)).replacingOccurrences(of: "\n", with: "\\n")
-                } else {
-                    reps.append(ClipRepresentation(uti: uti, data: data, filename: bundleFilename))
-                    clipType = .filePath
-                    preview = "[\(utType.localizedDescription ?? ext) \(data.count / 1024)KB] \(url.lastPathComponent)"
-                }
-            } else {
-                reps.append(ClipRepresentation(uti: uti, data: data, filename: bundleFilename))
-                clipType = .filePath
-                preview = "[\(utType.localizedDescription ?? ext) \(data.count / 1024)KB] \(url.lastPathComponent)"
-            }
+            var reps: [ClipRepresentation] = []
 
-            let content = ClipContent(representations: reps, preview: preview, primaryType: clipType, totalSize: data.count)
-            let sensitive = config.isSensitive(preview)
-            let entry = try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: sensitive)
+            // File URL representation (like Finder copy)
+            reps.append(ClipRepresentation(
+                uti: "public.file-url",
+                data: url.absoluteString.data(using: .utf8)!,
+                filename: "fileurl.txt"
+            ))
 
-            // Put on system clipboard
+            // Native content
+            reps.append(ClipRepresentation(
+                uti: uti,
+                data: data,
+                filename: ClipboardMonitor.filename(for: uti)
+            ))
+
+            // Put on system clipboard — daemon saves to DB
             copyToPasteboard(reps)
 
-            FileHandle.standardError.write("Added \(url.lastPathComponent) (\(ListRenderer.formatSize(data.count)), \(clipType.rawValue)) id=\(entry.id)\n".data(using: .utf8)!)
+            let desc = utType.localizedDescription ?? ext
+            FileHandle.standardError.write("Copied \(url.lastPathComponent) (\(ListRenderer.formatSize(data.count)), \(desc))\n".data(using: .utf8)!)
+
+            // Pace for daemon to pick up each file
+            if i < files.count - 1 && pace > 0 {
+                Thread.sleep(forTimeInterval: pace)
+            }
         }
     }
 
