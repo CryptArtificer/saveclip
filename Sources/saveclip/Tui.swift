@@ -686,7 +686,7 @@ final class TuiRunner {
         if text.contains("function") || text.contains("const ") || text.contains("=> {") { return "js" }
         if text.contains("fn ") && text.contains("->") { return "rs" }
         if text.contains("package ") && text.contains(":=") { return "go" }
-        return "sh"
+        return "md"
     }
 
     private func highlightWithBat(_ text: String, width: Int) -> String? {
