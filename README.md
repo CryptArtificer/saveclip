@@ -4,17 +4,19 @@
   <img src="images/better-image.png" width="400" alt="saveclip">
 </p>
 
-Clipboard history daemon for macOS.
+Clipboard history manager for macOS.
 
 > **Note** — This is a personal tool. You are welcome to explore the code or
 > fork it, but please set your expectations accordingly.
 
 ## What it does
 
-Runs as a background daemon, polling `NSPasteboard` and saving every copy
-(text, images, file paths) to SQLite + on-disk bundles with all UTI
-representations preserved. A built-in TUI picker lets you search, filter,
-and restore entries instantly.
+A background daemon polls `NSPasteboard` and saves every copy (text, images,
+file paths) to SQLite + on-disk bundles with all UTI representations preserved.
+The binary doubles as a CLI — `saveclip` alone prints the latest clip (like
+`pbpaste`), piped input is saved (like `pbcopy`), and file arguments are added
+to history. A built-in TUI picker lets you search, filter, and restore entries
+instantly.
 
 ## Features
 
@@ -25,9 +27,9 @@ and restore entries instantly.
 - **Auto-refresh** — TUI updates live as new clipboard entries arrive
 - **Mouse support** — click to select, double-click to copy, scroll wheel, draggable preview/list divider
 - **Adaptive colors** — detects terminal fg/bg colors via OSC 10/11, age-based grey gradient that works in dark and light modes, reacts to theme changes live
+- **Security** — skips concealed/transient pasteboard items (1Password, security codes); auto-flags AWS keys, GitHub PATs, SSH keys, JWTs, etc.
 - **Deduplication** — identical content is merged, most recent timestamp wins
 - **Branches** — organize clips by context (auto-route by app, manual switch)
-- **Sensitive detection** — auto-flags AWS keys, GitHub PATs, SSH keys, JWTs, etc.
 - **Frequency tracking** — surfaces repeatedly copied entries
 - **Pin / TTL** — pin important clips; old unpinned ones expire automatically
 - **Compression** — gzip-compresses old entries to save disk space
@@ -41,8 +43,8 @@ and restore entries instantly.
 ## Install
 
 ```sh
-make install        # builds release + copies to /usr/local/bin
-make link           # symlinks zsh integration to ~/.zsh/
+sudo make install   # builds, installs to both paths, re-signs, restarts daemon
+make link           # symlinks zsh integration to ~/.zsh/ (one-time setup)
 ```
 
 Then source from your `.zshrc`:
@@ -50,6 +52,17 @@ Then source from your `.zshrc`:
 ```sh
 source ~/.zsh/saveclip.zsh
 ```
+
+The `saveclip` binary works directly or through the `clip` zsh wrapper:
+
+- `saveclip` / `clip` — print latest clip to stdout (falls back to live pasteboard)
+- `echo foo | saveclip` / `echo foo | clip` — save stdin, tee to stdout
+- `saveclip file.png` / `clip add file.png` — add file to history
+- `saveclip 42` / `clip 42` — copy entry #42 back to clipboard
+- `saveclip --help` — quick usage + all subcommands
+- `clip help` — detailed wrapper help
+
+The wrapper adds a few shortcuts: `clip -5` for last 5, `clip --pop`, `clb` for the TUI.
 
 ## TUI picker
 
@@ -99,6 +112,7 @@ clip --pop              # print last clip and remove it
 clip -5                 # last 5 entries (double-newline separated)
 clip -5 -0              # last 5 entries (null-separated)
 echo foo | clip         # save stdin, pass through to stdout
+echo foo | clip -q      # save quietly (no tee, no status output)
 cat file | clip         # save entire file as one entry
 ... | clip | jq         # tee: saves and passes through
 ... | clip -s           # slurp all stdin as one entry
@@ -130,6 +144,7 @@ clip branch work        # switch
 clip branch -           # switch back to main
 clip branches           # list all branches with counts
 clip move <id> <branch>
+clip help               # wrapper help (safer than clip --help in non-tty shells)
 ```
 
 ### TUI keybindings
@@ -172,6 +187,9 @@ compress_after_days = 7
 ttl_days = 90
 excluded_apps = ["1Password", "Keychain Access"]
 sensitive_patterns = ["my-custom-pattern"]
+
+# Concealed/transient pasteboard types are always skipped
+# (1Password, macOS security codes, autofill)
 
 # Auto-route apps to branches
 branch.Slack = "work"

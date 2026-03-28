@@ -107,6 +107,7 @@ _clip_help() {
   echo -e "${_m}  Input${_r} ${_d}(pipe detected — acts like pbcopy, tees to stdout)${_r}"
   echo -e "${_d}  ─────────────────────────────────────────${_r}"
   echo -e "  ${_c}echo hi | clip${_r}         Save as one entry, pass through"
+  echo -e "  ${_c}echo hi | clip -q${_r}      Save quietly (no tee, no status)"
   echo -e "  ${_c}cat f | clip | jq${_r}      Tee: saves and pipes to next command"
   echo -e "  ${_c}... | clip -s${_r}          Slurp: force all stdin as one entry"
   echo -e "  ${_d}Default splits on \\0 (null bytes). No nulls = one entry.${_r}"
