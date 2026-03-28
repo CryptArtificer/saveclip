@@ -361,6 +361,11 @@ struct Paste: ParsableCommand {
         let entries = storage.list(limit: count)
 
         if entries.isEmpty {
+            // Fall back to live system pasteboard
+            if let str = NSPasteboard.general.string(forType: .string) {
+                FileHandle.standardOutput.write(str.data(using: .utf8)!)
+                return
+            }
             FileHandle.standardError.write("No clipboard entries.\n".data(using: .utf8)!)
             throw ExitCode.failure
         }
