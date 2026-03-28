@@ -416,6 +416,7 @@ struct Add: ParsableCommand {
 
     func run() throws {
         let config = Config.load()
+        SensitiveDetector.setUserPatterns(config.sensitivePatterns)
         if !files.isEmpty {
             let storage = try Storage(config: config)
             let branch = BranchState.current()
@@ -490,7 +491,7 @@ struct Add: ParsableCommand {
             }
 
             let content = ClipContent(representations: reps, preview: preview, primaryType: clipType, totalSize: data.count)
-            let entry = try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: config.isSensitive(preview))
+            let entry = try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: SensitiveDetector.isSensitive(preview))
 
             // Copy to system clipboard with skip marker
             copyToPasteboard(reps, skip: true)
@@ -507,7 +508,7 @@ struct Add: ParsableCommand {
         let rep = ClipRepresentation(uti: "public.utf8-plain-text", data: data, filename: "text.txt")
         let preview = String(text.prefix(5000)).replacingOccurrences(of: "\n", with: "\\n")
         let content = ClipContent(representations: [rep], preview: preview, primaryType: .text, totalSize: data.count)
-        let sensitive = config.isSensitive(preview)
+        let sensitive = SensitiveDetector.isSensitive(preview)
         try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: sensitive)
 
         // Put on system clipboard with skip marker so daemon doesn't re-capture
@@ -694,12 +695,13 @@ struct Scrub: ParsableCommand {
 
     func run() throws {
         let config = Config.load()
+        SensitiveDetector.setUserPatterns(config.sensitivePatterns)
         let storage = try Storage(config: config)
         let allEntries = storage.list(limit: 100000)
 
         var unflagged: [ClipEntry] = []
         for entry in allEntries {
-            if !entry.sensitive && config.isSensitive(entry.preview) {
+            if !entry.sensitive && SensitiveDetector.isSensitive(entry.preview) {
                 unflagged.append(entry)
             }
         }

@@ -9,6 +9,15 @@ enum SensitiveDetector {
         }
     }()
 
+    private static var userMatchers: [(label: String, regex: NSRegularExpression)] = []
+
+    static func setUserPatterns(_ patterns: [String]) {
+        userMatchers = patterns.compactMap { p in
+            guard let re = try? NSRegularExpression(pattern: p, options: []) else { return nil }
+            return (label: "user pattern", regex: re)
+        }
+    }
+
     struct Match {
         let label: String
     }
@@ -16,6 +25,11 @@ enum SensitiveDetector {
     static func check(_ text: String) -> Match? {
         let range = NSRange(text.startIndex..., in: text)
         for m in matchers {
+            if m.regex.firstMatch(in: text, range: range) != nil {
+                return Match(label: m.label)
+            }
+        }
+        for m in userMatchers {
             if m.regex.firstMatch(in: text, range: range) != nil {
                 return Match(label: m.label)
             }

@@ -87,6 +87,7 @@ final class Daemon {
     static func runLoop() throws {
         let config = Config.load()
         try config.ensureDirectories()
+        SensitiveDetector.setUserPatterns(config.sensitivePatterns)
         rotateLogs()
 
         // Write PID file
@@ -152,7 +153,7 @@ final class Daemon {
             }
 
             // Flag sensitive content
-            let sensitive = content.primaryType == .text && config.isSensitive(content.preview)
+            let sensitive = content.primaryType == .text && SensitiveDetector.isSensitive(content.preview)
 
             // Resolve branch: heuristic rules first, then active branch
             let branch = config.resolveBranch(sourceApp: sourceApp) ?? BranchState.current()

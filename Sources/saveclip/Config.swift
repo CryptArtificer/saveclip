@@ -17,17 +17,6 @@ struct Config {
         let branch: String
     }
 
-    // Built-in patterns that are always checked (private keys, tokens, etc.)
-    static let builtinSensitivePatterns = [
-        "-----BEGIN .* PRIVATE KEY-----",
-        "ssh-(rsa|ed25519|dss|ecdsa) AAAA",
-        "AKIA[0-9A-Z]{16}",                        // AWS access key
-        "ghp_[0-9a-zA-Z]{36}",                     // GitHub PAT
-        "sk-[0-9a-zA-Z]{20,}",                     // OpenAI / Anthropic keys
-        "xox[bpars]-[0-9a-zA-Z\\-]{10,}",          // Slack tokens
-        "eyJ[0-9a-zA-Z_-]{20,}\\.[0-9a-zA-Z_-]",  // JWT
-    ]
-
     static let defaultDir = NSHomeDirectory() + "/.saveclip"
     static let configPath = defaultDir + "/config.toml"
 
@@ -96,17 +85,6 @@ struct Config {
         }
 
         return config
-    }
-
-    func isSensitive(_ text: String) -> Bool {
-        let allPatterns = Config.builtinSensitivePatterns + sensitivePatterns
-        for pattern in allPatterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
-               regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil {
-                return true
-            }
-        }
-        return false
     }
 
     func resolveBranch(sourceApp: String?) -> String? {

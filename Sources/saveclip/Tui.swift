@@ -150,6 +150,7 @@ final class TuiRunner {
 
     init(count: Int, initialQuery: String?, unsafe: Bool = false) throws {
         self.config = Config.load()
+        SensitiveDetector.setUserPatterns(config.sensitivePatterns)
         self.storage = try Storage(config: config)
         self.maxCount = count
         self.state = ListState()
@@ -550,13 +551,7 @@ final class TuiRunner {
 
     private func makeListItem(_ entry: ClipEntry, now: Date, calendar: Calendar) -> ListItem {
         let age = relativeTime(from: entry.timestamp, to: now, calendar: calendar)
-        // TUI-side sensitive detection (broader than daemon's capture-time check)
-        let sensitive: Bool
-        if state.unsafeMode {
-            sensitive = false
-        } else {
-            sensitive = entry.sensitive || (entry.type == .text && SensitiveDetector.isSensitive(entry.preview))
-        }
+        let sensitive = !state.unsafeMode && entry.sensitive
         return ListItem(
             id: entry.id,
             age: age,
@@ -643,7 +638,7 @@ final class TuiRunner {
             if let app = entry.sourceApp { parts.append("from \(app)") }
             lines = parts
         case .text:
-            if entry.sensitive || (!state.unsafeMode && SensitiveDetector.isSensitive(entry.preview)) {
+            if entry.sensitive && !state.unsafeMode {
                 lines = ["[sensitive content]"]
             } else if entry.totalSize > 64 * 1024 {
                 lines = entry.preview.components(separatedBy: "\\n")
