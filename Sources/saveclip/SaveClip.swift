@@ -505,8 +505,8 @@ struct Add: ParsableCommand {
         let sensitive = config.isSensitive(preview)
         try storage.save(content: content, preview: preview, sourceApp: "cli", branch: branch, sensitive: sensitive)
 
-        // Put on system clipboard
-        copyToPasteboard([rep])
+        // Put on system clipboard with skip marker so daemon doesn't re-capture
+        copyToPasteboard([rep], skip: true)
     }
 
     static let skipMarkerType = NSPasteboard.PasteboardType("com.saveclip.already-saved")
@@ -556,7 +556,7 @@ struct Pop: ParsableCommand {
 struct Frequent: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "frequent",
-        abstract: "Show most frequently copied entries (MRU)"
+        abstract: "Show most frequently copied entries"
     )
 
     @Option(name: .shortAndLong, help: "Number of entries to show")
