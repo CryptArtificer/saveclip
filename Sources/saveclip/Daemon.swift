@@ -124,6 +124,11 @@ final class Daemon {
                 return
             }
 
+            // Skip concealed/transient items (1Password, security codes, etc.)
+            if monitor.hasConcealedContent() {
+                return
+            }
+
             guard let content = monitor.currentContent() else { return }
 
             // Check size limit
