@@ -71,9 +71,23 @@ final class Daemon {
         try process.run()
     }
 
+    private static func rotateLogs() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: logPath),
+              let attrs = try? fm.attributesOfItem(atPath: logPath),
+              let size = attrs[.size] as? Int64,
+              size > 5 * 1024 * 1024 else { return }
+
+        let backupPath = logPath + ".1"
+        try? fm.removeItem(atPath: backupPath)
+        try? fm.moveItem(atPath: logPath, toPath: backupPath)
+        fm.createFile(atPath: logPath, contents: nil)
+    }
+
     static func runLoop() throws {
         let config = Config.load()
         try config.ensureDirectories()
+        rotateLogs()
 
         // Write PID file
         let pid = ProcessInfo.processInfo.processIdentifier
