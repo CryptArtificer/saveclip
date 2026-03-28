@@ -544,6 +544,7 @@ final class Storage {
     func runMaintenance() {
         compressOldEntries()
         expireOldEntries()
+        enforceMaxEntries()
     }
 
     private func compressOldEntries() {
@@ -603,6 +604,32 @@ final class Storage {
             ids.append(id)
         }
 
+        if !ids.isEmpty {
+            let idList = ids.map { String($0) }.joined(separator: ",")
+            try? execute("DELETE FROM clips WHERE id IN (\(idList))")
+        }
+    }
+
+    private func enforceMaxEntries() {
+        guard config.maxEntries > 0 else { return }
+        let count = entryCount()
+        guard count > config.maxEntries else { return }
+        let excess = count - config.maxEntries
+
+        let query = "SELECT id, file_path FROM clips WHERE pinned = 0 ORDER BY timestamp ASC LIMIT ?"
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK else { return }
+        sqlite3_bind_int(stmt, 1, Int32(excess))
+
+        var ids: [Int64] = []
+        let fm = FileManager.default
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let id = sqlite3_column_int64(stmt, 0)
+            let path = String(cString: sqlite3_column_text(stmt, 1))
+            try? fm.removeItem(atPath: path)
+            ids.append(id)
+        }
         if !ids.isEmpty {
             let idList = ids.map { String($0) }.joined(separator: ",")
             try? execute("DELETE FROM clips WHERE id IN (\(idList))")

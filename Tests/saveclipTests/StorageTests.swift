@@ -134,4 +134,20 @@ struct StorageTests {
         #expect(storage.entryCount() > 0)
         try storage.delete(id: entry.id)
     }
+
+    @Test func maxEntriesEnforced() throws {
+        let path = NSTemporaryDirectory() + "saveclip-test-\(UUID().uuidString).db"
+        var config = Config.load()
+        config.maxEntries = 5
+        let storage = try Storage(config: config, dbPath: path)
+
+        for i in 0..<8 {
+            let content = makeTextContent("maxent-\(i)-\(UUID().uuidString)")
+            try storage.save(content: content, preview: content.preview, sourceApp: nil, branch: "main")
+        }
+
+        storage.runMaintenance()
+        let count = storage.entryCount()
+        #expect(count <= 5)
+    }
 }
