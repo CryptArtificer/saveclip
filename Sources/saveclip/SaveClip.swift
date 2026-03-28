@@ -3,26 +3,33 @@ import ArgumentParser
 import Foundation
 import UniformTypeIdentifiers
 
+private let colorEnabled: Bool = {
+    ProcessInfo.processInfo.environment["NO_COLOR"] == nil && isatty(STDOUT_FILENO) != 0
+}()
+
 private func printEntries(_ entries: [ClipEntry], showBranch: Bool = false) {
     let now = Date()
     let calendar = Calendar.current
     let idWidth = entries.map { String($0.id).count }.max() ?? 1
 
-    let dim = "\u{001B}[2m"
-    let reset = "\u{001B}[0m"
-    let bold = "\u{001B}[1m"
-    let magenta = "\u{001B}[35m"
+    let dim = colorEnabled ? "\u{001B}[2m" : ""
+    let reset = colorEnabled ? "\u{001B}[0m" : ""
+    let bold = colorEnabled ? "\u{001B}[1m" : ""
+    let magenta = colorEnabled ? "\u{001B}[35m" : ""
+    let yellow = colorEnabled ? "\u{001B}[33m" : ""
+    let cyan = colorEnabled ? "\u{001B}[36m" : ""
+    let red = colorEnabled ? "\u{001B}[31m" : ""
 
     for entry in entries {
         let age = relativeTime(from: entry.timestamp, to: now, calendar: calendar)
-        let pin = entry.pinned ? " \u{001B}[33m*\(reset)" : " "
-        let freq = entry.copyCount > 1 ? " \u{001B}[36m×\(entry.copyCount)\(reset)" : ""
+        let pin = entry.pinned ? " \(yellow)*\(reset)" : " "
+        let freq = entry.copyCount > 1 ? " \(cyan)×\(entry.copyCount)\(reset)" : ""
 
         let typeTag: String
         switch entry.type {
         case .text: typeTag = ""
-        case .image: typeTag = "\u{001B}[36m[img]\(reset) "
-        case .filePath: typeTag = "\u{001B}[33m[file]\(reset) "
+        case .image: typeTag = "\(cyan)[img]\(reset) "
+        case .filePath: typeTag = "\(yellow)[file]\(reset) "
         }
 
         let branchTag: String
@@ -41,7 +48,6 @@ private func printEntries(_ entries: [ClipEntry], showBranch: Bool = false) {
         }
         preview = String(preview.prefix(70))
 
-        let red = "\u{001B}[31m"
         if entry.sensitive {
             // Redact in CLI: show first 8 chars + masked remainder
             let visible = String(preview.prefix(8))
@@ -85,6 +91,7 @@ public struct SaveClip: ParsableCommand {
               saveclip list         List recent entries
               saveclip search foo   Search history
             """,
+        version: "1.0.0",
         subcommands: [Add.self, BranchCmd.self, BranchesCmd.self, Clear.self, ConfigCmd.self, DaemonCmd.self, Delete.self, DeleteMatching.self, Frequent.self, Get.self, List.self, MoveCmd.self, Paste.self, Pin.self, Pop.self, Scrub.self, Search.self, Start.self, Status.self, Stop.self, TuiCommand.self, Unpin.self]
     )
 
@@ -165,7 +172,9 @@ struct List: ParsableCommand {
 
         let total = storage.entryCount(branch: all ? nil : filterBranch)
         if total > entries.count {
-            print("\n\u{001B}[2m\(entries.count) of \(total) entries. Use -c to show more.\u{001B}[0m")
+            let dim = colorEnabled ? "\u{001B}[2m" : ""
+            let reset = colorEnabled ? "\u{001B}[0m" : ""
+            print("\n\(dim)\(entries.count) of \(total) entries. Use -c to show more.\(reset)")
         }
     }
 }
@@ -339,7 +348,9 @@ struct Search: ParsableCommand {
 
         // Default: just list them
         printEntries(entries, showBranch: all)
-        print("\n\u{001B}[2m\(entries.count) match(es)\u{001B}[0m")
+        let dim = colorEnabled ? "\u{001B}[2m" : ""
+        let reset = colorEnabled ? "\u{001B}[0m" : ""
+        print("\n\(dim)\(entries.count) match(es)\(reset)")
     }
 }
 
@@ -578,10 +589,10 @@ struct Frequent: ParsableCommand {
             return
         }
 
-        let dim = "\u{001B}[2m"
-        let reset = "\u{001B}[0m"
-        let bold = "\u{001B}[1m"
-        let cyan = "\u{001B}[36m"
+        let dim = colorEnabled ? "\u{001B}[2m" : ""
+        let reset = colorEnabled ? "\u{001B}[0m" : ""
+        let bold = colorEnabled ? "\u{001B}[1m" : ""
+        let cyan = colorEnabled ? "\u{001B}[36m" : ""
         let idWidth = entries.map { String($0.entry.id).count }.max() ?? 1
 
         for fe in entries {
@@ -714,13 +725,17 @@ struct Scrub: ParsableCommand {
         printEntries(unflagged, showBranch: true)
 
         if dryRun {
+            let yellow = colorEnabled ? "\u{001B}[33m" : ""
+            let reset = colorEnabled ? "\u{001B}[0m" : ""
             let verb = delete ? "deleted" : "flagged as sensitive"
-            print("\n\u{001B}[33m\(unflagged.count) entry/entries would be \(verb). Run without --dry-run to apply.\u{001B}[0m")
+            print("\n\(yellow)\(unflagged.count) entry/entries would be \(verb). Run without --dry-run to apply.\(reset)")
         } else if delete {
             for entry in unflagged {
                 try storage.delete(id: entry.id)
             }
-            print("\n\u{001B}[31mDeleted \(unflagged.count) sensitive entry/entries.\u{001B}[0m")
+            let red = colorEnabled ? "\u{001B}[31m" : ""
+            let reset = colorEnabled ? "\u{001B}[0m" : ""
+            print("\n\(red)Deleted \(unflagged.count) sensitive entry/entries.\(reset)")
         } else {
             for entry in unflagged {
                 try storage.markSensitive(id: entry.id)
@@ -792,10 +807,10 @@ struct BranchesCmd: ParsableCommand {
         let branches = storage.listBranches()
         let current = BranchState.current()
 
-        let dim = "\u{001B}[2m"
-        let reset = "\u{001B}[0m"
-        let bold = "\u{001B}[1m"
-        let green = "\u{001B}[32m"
+        let dim = colorEnabled ? "\u{001B}[2m" : ""
+        let reset = colorEnabled ? "\u{001B}[0m" : ""
+        let bold = colorEnabled ? "\u{001B}[1m" : ""
+        let green = colorEnabled ? "\u{001B}[32m" : ""
 
         if branches.isEmpty {
             print("No branches yet.")
