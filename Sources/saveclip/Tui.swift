@@ -125,12 +125,28 @@ final class TuiRunner {
     private var batResult: (id: Int64, lines: [String])?
 
     // bat path (detected once at startup)
-    private static let batPath: String? = {
+    private static let batPath: String? = findBat()
+
+    private static func findBat() -> String? {
+        let fm = FileManager.default
         for path in ["/opt/homebrew/bin/bat", "/usr/local/bin/bat"] {
-            if FileManager.default.isExecutableFile(atPath: path) { return path }
+            if fm.isExecutableFile(atPath: path) {
+                return path
+            }
         }
-        return nil
-    }()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        process.arguments = ["bat"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return path?.isEmpty == false ? path : nil
+    }
 
     init(count: Int, initialQuery: String?, unsafe: Bool = false) throws {
         self.config = Config.load()
