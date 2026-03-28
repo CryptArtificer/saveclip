@@ -124,6 +124,17 @@ enum ListRenderer {
         return fixedOverhead + previewLines
     }
 
+    /// Clamp preview lines so the list always gets at least 5 rows.
+    /// Hides preview entirely if the terminal is too short.
+    static func effectivePreviewLines(stored: Int, termHeight: Int) -> Int {
+        let minListRows = 5
+        if termHeight < fixedOverhead + minListRows {
+            return 0
+        }
+        let maxPreview = termHeight - fixedOverhead - minListRows
+        return min(stored, max(0, maxPreview))
+    }
+
     static func visibleRows(termHeight: Int, previewLines: Int = 3) -> Int {
         return max(1, termHeight - overhead(previewLines: previewLines))
     }
@@ -133,7 +144,7 @@ enum ListRenderer {
         buf.hideCursor()
 
         let width = termWidth
-        let pvLines = state.previewLines
+        let pvLines = Self.effectivePreviewLines(stored: state.previewLines, termHeight: termHeight)
         let listRows = visibleRows(termHeight: termHeight, previewLines: pvLines)
         var row = 1
 

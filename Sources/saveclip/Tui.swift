@@ -282,6 +282,8 @@ final class TuiRunner {
                 continue
             }
 
+            let effPV = ListRenderer.effectivePreviewLines(stored: state.previewLines, termHeight: lastRows)
+
             switch key {
             case .enter:
                 if let item = state.selectedItem {
@@ -372,67 +374,67 @@ final class TuiRunner {
 
 
             case .up:
-                state.moveCursor(by: 1, visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: state.previewLines))
+                state.moveCursor(by: 1, visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: effPV))
                 schedulePreviewLoad()
                 needsRender = true
 
             case .down:
-                state.moveCursor(by: -1, visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: state.previewLines))
+                state.moveCursor(by: -1, visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: effPV))
                 schedulePreviewLoad()
                 needsRender = true
 
             case .pageUp:
-                state.pageDown(visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: state.previewLines))
+                state.pageDown(visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: effPV))
                 schedulePreviewLoad()
                 needsRender = true
 
             case .pageDown:
-                state.pageUp(visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: state.previewLines))
+                state.pageUp(visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: effPV))
                 schedulePreviewLoad()
                 needsRender = true
 
             case .home:
-                state.home(visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: state.previewLines))
+                state.home(visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: effPV))
                 schedulePreviewLoad()
                 needsRender = true
 
             case .end:
-                state.end(visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: state.previewLines))
+                state.end(visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: effPV))
                 schedulePreviewLoad()
                 needsRender = true
 
             case .scrollUp(let row, _):
                 let previewStart = 1 + ListRenderer.headerLines
-                let previewEnd = previewStart + state.previewLines
+                let previewEnd = previewStart + effPV
                 if row >= previewStart && row < previewEnd {
                     if state.previewScrollOffset > 0 {
                         state.previewScrollOffset -= 1
                         needsRender = true
                     }
                 } else {
-                    state.moveCursor(by: -1, visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: state.previewLines))
+                    state.moveCursor(by: -1, visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: effPV))
                     schedulePreviewLoad()
                     needsRender = true
                 }
 
             case .scrollDown(let row, _):
                 let previewStart = 1 + ListRenderer.headerLines
-                let previewEnd = previewStart + state.previewLines
+                let previewEnd = previewStart + effPV
                 if row >= previewStart && row < previewEnd {
                     let totalLines = state.previewContent?.count ?? 0
-                    let maxScroll = max(0, totalLines - state.previewLines)
+                    let maxScroll = max(0, totalLines - effPV)
                     if state.previewScrollOffset < maxScroll {
                         state.previewScrollOffset += 1
                         needsRender = true
                     }
                 } else {
-                    state.moveCursor(by: 1, visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: state.previewLines))
+                    state.moveCursor(by: 1, visibleRows: ListRenderer.visibleRows(termHeight: lastRows, previewLines: effPV))
                     schedulePreviewLoad()
                     needsRender = true
                 }
 
             case .mouseClick(let row, _):
-                let sepRow = 1 + ListRenderer.headerLines + state.previewLines
+                let sepRow = 1 + ListRenderer.headerLines + effPV
                 if row == sepRow {
                     isDraggingDivider = true
                     dragStartRow = row
@@ -440,8 +442,8 @@ final class TuiRunner {
                     state.dividerHighlight = true
                     needsRender = true
                 } else {
-                    let listRows = ListRenderer.visibleRows(termHeight: lastRows, previewLines: state.previewLines)
-                    let listStartRow = 1 + ListRenderer.headerLines + state.previewLines + ListRenderer.separatorLines
+                    let listRows = ListRenderer.visibleRows(termHeight: lastRows, previewLines: effPV)
+                    let listStartRow = 1 + ListRenderer.headerLines + effPV + ListRenderer.separatorLines
                     if row >= listStartRow && row < listStartRow + listRows {
                         let visualIndex = (listStartRow + listRows - 1) - row
                         let idx = state.scrollOffset + visualIndex
