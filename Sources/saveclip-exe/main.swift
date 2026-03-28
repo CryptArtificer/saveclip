@@ -11,6 +11,8 @@ if let first = args.first, !first.hasPrefix("-"), !subcommands.contains(first) {
     let path = first.hasPrefix("/") ? first : fm.currentDirectoryPath + "/" + first
     if fm.fileExists(atPath: path) {
         args.insert("add", at: 0)
+    } else if Int64(first) != nil {
+        args.insert("get", at: 0)
     }
 }
 
