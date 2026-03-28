@@ -27,23 +27,31 @@ clean:
 
 .PHONY: install uninstall link
 
-install: release
-	install -d $(DESTDIR)$(PREFIX)/bin
-	install -m 755 $(BINARY) $(DESTDIR)$(PREFIX)/bin/saveclip
+# install and deploy are the same — installs to both /usr/local/bin (CLI) and
+# ~/.local/bin (launchd daemon), re-signs both (macOS kills unsigned copies),
+# and restarts the daemon.
+install: deploy
 
 deploy: release
 	@echo "Installing to $(PREFIX)/bin and ~/.local/bin..."
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m 755 $(BINARY) $(DESTDIR)$(PREFIX)/bin/saveclip
+	codesign --sign - $(DESTDIR)$(PREFIX)/bin/saveclip
 	mkdir -p $(HOME)/.local/bin
 	cp $(BINARY) $(HOME)/.local/bin/saveclip
+	codesign --sign - $(HOME)/.local/bin/saveclip
 	@echo "Restarting daemon..."
 	-launchctl kickstart -k gui/$$(id -u)/com.johjoh.saveclip 2>/dev/null || \
 		($(BINARY) stop 2>/dev/null; sleep 0.5; $(BINARY) start)
+	@if [ "$$(id -u)" = "0" ] && [ -n "$$SUDO_USER" ]; then \
+		echo "Fixing .build/ ownership..."; \
+		chown -R $$SUDO_USER:staff .build/; \
+	fi
 	@echo "Done."
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/saveclip
+	rm -f $(HOME)/.local/bin/saveclip
 	rm -f $(ZSH_DST)
 
 link:
@@ -96,7 +104,7 @@ help:
 	@echo "  make clean        Remove build artifacts"
 	@echo ""
 	@echo "Install:"
-	@echo "  make install      Install to $(PREFIX)/bin"
+	@echo "  make install      Install to both paths, re-sign, restart daemon"
 	@echo "  make uninstall    Remove from $(PREFIX)/bin"
 	@echo "  make link         Symlink zsh integration to ~/.zsh/"
 	@echo ""

@@ -25,9 +25,9 @@ clip() {
     return 1
   fi
 
-  # Pipe mode: stdin is not a TTY → save to clipboard history
+  # Pipe mode: binary handles stdin detection natively
   if [[ ! -t 0 ]]; then
-    "$bin" add "$@"
+    "$bin" "$@"
     return $?
   fi
 

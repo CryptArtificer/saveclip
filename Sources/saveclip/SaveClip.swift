@@ -73,9 +73,39 @@ public struct SaveClip: ParsableCommand {
     public init() {}
     public static let configuration = CommandConfiguration(
         commandName: "saveclip",
-        abstract: "Clipboard history daemon for macOS",
-        subcommands: [Start.self, Stop.self, Status.self, List.self, Get.self, Search.self, Paste.self, Pop.self, Frequent.self, Pin.self, Unpin.self, Delete.self, DeleteMatching.self, Scrub.self, Clear.self, BranchCmd.self, BranchesCmd.self, MoveCmd.self, ConfigCmd.self, DaemonCmd.self, TuiCommand.self, Add.self]
+        abstract: "Clipboard history manager for macOS",
+        discussion: """
+            Quick usage:
+              saveclip              Print the latest clip to stdout
+              echo hi | saveclip    Save stdin (tees to stdout, splits on \\0)
+              echo hi | saveclip -s Slurp all stdin as one entry
+              echo hi | saveclip -q Save quietly (no tee, no status output)
+              saveclip file.png     Add a file to history
+              saveclip tui          Interactive fullscreen picker
+              saveclip list         List recent entries
+              saveclip search foo   Search history
+            """,
+        subcommands: [Add.self, BranchCmd.self, BranchesCmd.self, Clear.self, ConfigCmd.self, DaemonCmd.self, Delete.self, DeleteMatching.self, Frequent.self, Get.self, List.self, MoveCmd.self, Paste.self, Pin.self, Pop.self, Scrub.self, Search.self, Start.self, Status.self, Stop.self, TuiCommand.self, Unpin.self]
     )
+
+    @Flag(name: .shortAndLong, help: .hidden)
+    var slurp = false
+
+    @Flag(name: .shortAndLong, help: .hidden)
+    var quiet = false
+
+    public func run() throws {
+        if isatty(STDIN_FILENO) == 0 {
+            var args: [String] = []
+            if slurp { args.append("--slurp") }
+            if quiet { args.append("--quiet") }
+            let add = try Add.parse(args)
+            try add.run()
+        } else {
+            let paste = try Paste.parse([])
+            try paste.run()
+        }
+    }
 }
 
 struct Start: ParsableCommand {
@@ -373,6 +403,9 @@ struct Add: ParsableCommand {
     @Flag(name: .shortAndLong, help: "Slurp all input as one entry (ignore null delimiters)")
     var slurp = false
 
+    @Flag(name: .shortAndLong, help: "Suppress output (no tee, no status messages)")
+    var quiet = false
+
     @Argument(help: "Files to add (omit to read from stdin)")
     var files: [String] = []
 
@@ -409,8 +442,10 @@ struct Add: ParsableCommand {
             }
         }
 
-        // Tee: pass through raw input
-        FileHandle.standardOutput.write(inputData)
+        // Tee: pass through raw input so saveclip works mid-pipeline
+        if !quiet {
+            FileHandle.standardOutput.write(inputData)
+        }
     }
 
     private static let maxFiles = 20
@@ -455,7 +490,9 @@ struct Add: ParsableCommand {
             // Copy to system clipboard with skip marker
             copyToPasteboard(reps, skip: true)
 
-            FileHandle.standardError.write("Added \(url.lastPathComponent) (\(ListRenderer.formatSize(data.count)), \(clipType.rawValue)) id=\(entry.id)\n".data(using: .utf8)!)
+            if !quiet {
+                FileHandle.standardError.write("Added \(url.lastPathComponent) (\(ListRenderer.formatSize(data.count)), \(clipType.rawValue)) id=\(entry.id)\n".data(using: .utf8)!)
+            }
         }
     }
 
